@@ -19,7 +19,7 @@ async function init() {
     const {data:{session}} = await state.sb.auth.getSession();
     await setSession(session);
     state.sb.auth.onAuthStateChange((_event,s) => { queueMicrotask(async()=> { await setSession(s); render(); }); });
-    const requested=location.pathname.startsWith('/admin/login')?'admin-login':location.hash.slice(1);
+    const requested=location.pathname.startsWith('/admin/login')?'admin-login':location.pathname==='/login'?'login':location.pathname==='/daftar'?'register':location.hash.slice(1);
     if(['home','catalog','mine','admin','login','register','admin-login'].includes(requested))state.view=requested;
     if(state.view==='admin'&&!admin())state.view='admin-login';
     if(state.view==='mine'&&!state.user)state.view='login';
