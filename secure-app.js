@@ -23,6 +23,19 @@ async function init() {
     if(['home','catalog','mine','admin','login','register','admin-login'].includes(requested))state.view=requested;
     if(state.view==='admin'&&!admin())state.view='admin-login';
     if(state.view==='mine'&&!state.user)state.view='login';
+    // Return from Google authentication: preserve requested audience, check database role.
+    const intent=sessionStorage.getItem('academy_oauth_intent');
+    if(intent && state.user){
+      sessionStorage.removeItem('academy_oauth_intent');
+      if(intent==='admin'){
+        state.view=admin()?'admin':'admin-login';
+        if(admin())await loadRequests();
+      }else{
+        state.view='mine';
+        await loadMine();
+      }
+      location.hash='#'+state.view;
+    }
     await loadCatalog();
   } catch(e) {state.error=e.message || 'Gagal menyiapkan aplikasi.';}
   state.loading=false; render();
@@ -70,29 +83,16 @@ async function openCourse(id) {
   }
   go('detail');
 }
-async function signIn(ev,isAdmin=false) {
-  ev.preventDefault();
-  const f=ev.target;
-  const email=f.elements.email.value.trim();
-  const password=f.elements.password.value;
-  const {error}=await state.sb.auth.signInWithPassword({email,password});
-  if(error)return notice('Login gagal: periksa email, kata sandi, atau verifikasi email.');
-  await setSession((await state.sb.auth.getSession()).data.session);
-  if(isAdmin && !admin()) {await state.sb.auth.signOut();state.user=null;state.role='peserta';return notice('Akun ini bukan administrator. Gunakan halaman login peserta.');}
-  await loadCatalog(); await loadMine();
-  if(admin())await loadRequests();
-  go(isAdmin?'admin':'mine');
-}
-async function signUp(ev) {
-  ev.preventDefault();
-  const f=ev.target, name=f.elements.fullname.value.trim(), email=f.elements.email.value.trim();
-  if(name.length<2)return notice('Nama lengkap minimal dua karakter.');
-  if(f.elements.password.value.length<8)return notice('Kata sandi minimal 8 karakter.');
-  if(f.elements.password.value!==f.elements.confirmation.value)return notice('Konfirmasi kata sandi tidak sama.');
-  const {data,error}=await state.sb.auth.signUp({email,password:f.elements.password.value,options:{data:{full_name:name}}});
-  if(error)return notice('Pendaftaran gagal: '+error.message);
-  notice(data.session?'Pendaftaran berhasil.':'Pendaftaran berhasil, periksa email untuk verifikasi akun.');
-  if(data.session){await setSession(data.session);go('mine');}else go('login');
+async function loginGoogle(isAdmin=false) {
+  if(!state.sb)return notice('Koneksi Supabase belum siap.');
+  // Only authorization stored in academy_admins can elevate a Google account.
+  const returnPath=isAdmin?'/admin/login':'/login';
+  sessionStorage.setItem('academy_oauth_intent',isAdmin?'admin':'peserta');
+  const {error}=await state.sb.auth.signInWithOAuth({
+    provider:'google',
+    options:{redirectTo:location.origin+returnPath,queryParams:{prompt:'select_account'}}
+  });
+  if(error)notice('Login Google tidak tersedia: '+error.message);
 }
 async function signOut() {await state.sb.auth.signOut();state.user=null;state.role='peserta';state.enrollments=[];state.lessons=[];go('home');}
 async function enroll() {
@@ -163,8 +163,21 @@ async function beginEdit(id=null) {
 function addLesson() {const box=$('#lessonRows');if(box)box.insertAdjacentHTML('beforeend',lessonRow(box.children.length));}
 function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit"><input required name="lessonTitle" placeholder="Judul pelajaran '+(i+1)+'" value="'+esc(l.title)+'"><input required name="lessonUrl" placeholder="Link video YouTube" value="'+esc(l.youtube_id)+'"><button class="btn secondary" type="button" onclick="this.parentElement.remove()">×</button></div>';}
 function authView(mode) {
- const register=mode==='register',administrator=mode==='admin-login';
- return '<section class="auth-wrap"><div class="auth-art"><span class="pill">🎓 E-COURSE ACADEMY</span><h1>Belajar. Bertumbuh. Berkarya.</h1><p>Portal belajar digital melalui kursus YouTube dengan progres tersimpan secara online.</p><div class="auth-illustration">📚 ✦ 🎓</div></div><div class="auth-panel"><span class="eyebrow">'+(administrator?'PORTAL ADMINISTRATOR':register?'PENDAFTARAN PESERTA':'AKUN PESERTA')+'</span><h2>'+(administrator?'Login Administrator':register?'Daftar Akun Baru':'Selamat Datang Kembali')+'</h2><p>'+(administrator?'Hanya untuk dua akun administrator yang ditunjuk.':register?'Daftar terlebih dahulu untuk mengikuti kursus.':'Masuk menggunakan akun peserta terdaftar.')+'</p><form class="form" id="authForm">'+(register?'<label>Nama lengkap</label><input name="fullname" autocomplete="name" required minlength="2" maxlength="100" placeholder="Nama lengkap">':'')+'<label>Email</label><input type="email" name="email" autocomplete="email" required placeholder="nama@email.com"><label>Kata sandi</label><input name="password" type="password" autocomplete="'+(register?'new-password':'current-password')+'" required minlength="'+(register?8:1)+'" placeholder="Kata sandi">'+(register?'<label>Konfirmasi kata sandi</label><input type="password" name="confirmation" autocomplete="new-password" minlength="8" required placeholder="Ulangi kata sandi">':'')+'<button class="btn auth-submit" type="submit">'+(register?'Daftar Sekarang':'Masuk')+' →</button></form><div class="auth-switch">'+(administrator?'<button data-go="login">Login Peserta</button>':register?'Sudah punya akun? <button data-go="login">Masuk</button>':'Belum terdaftar? <button data-go="register">Daftar</button>')+'</div><div class="notice" style="margin-top:15px;font-size:12px">'+(administrator?'Akun administrator harus dibuat di Supabase Auth lalu diberi peran melalui tabel academy_admins; tidak tersedia daftar admin publik.':register?'Jika verifikasi email aktif, periksa Inbox/Spam dan klik tautan konfirmasi sebelum login.':'Belum punya akun? Pilih Daftar dan verifikasi email jika diminta.')+'</div><p style="margin-top:12px;font-size:12px"><a href="/api/health" target="_blank" rel="noopener noreferrer" style="color:#3155c0;text-decoration:underline">Periksa status koneksi database</a></p></div></section>';
+  const register=mode==='register', administrator=mode==='admin-login';
+  const blocked=administrator&&state.user&&!admin();
+  const intro=administrator?'Hanya untuk Super Admin dan Admin yang sudah ditetapkan di database Academy.':
+              register?'Peserta baru dapat mendaftar secara otomatis menggunakan akun Google.':
+              'Masuk menggunakan akun Google yang telah Anda pilih.';
+  return '<section class="auth-wrap"><div class="auth-art"><span class="pill">🎓 E-COURSE ACADEMY</span><h1>Belajar. Bertumbuh. Berkarya.</h1><p>Platform kursus video YouTube gratis dan premium dengan progres tersimpan secara online.</p><div class="auth-illustration">📚 ✦ 🎓</div></div><div class="auth-panel">'
+    +'<span class="eyebrow">'+(administrator?'PORTAL ADMINISTRATOR':register?'PENDAFTARAN PESERTA':'AKUN PESERTA')+'</span>'
+    +'<h2>'+(administrator?'Login Administrator':register?'Daftar dengan Google':'Masuk dengan Google')+'</h2>'
+    +'<p>'+intro+'</p>'
+    +(blocked?'<div class="notice" style="margin:16px 0">Akun Google ini adalah akun peserta, bukan administrator. Admin harus diberikan izin melalui academy_admins. Silakan keluar dan gunakan akun admin yang ditetapkan.</div>':'')
+    +'<button class="btn auth-submit" type="button" data-action="'+(administrator?'google-admin':'google-user')+'" style="margin:16px 0;width:100%;justify-content:center;background:#fff;border:1px solid #cfd8e8;color:#263853;font-size:14px"><span aria-hidden="true" style="font-weight:800;color:#4285f4;font-size:20px">G</span> '+(administrator?'Masuk sebagai Admin dengan Google':register?'Daftar dengan Google':'Masuk dengan Google')+' →</button>'
+    +(blocked?'<button class="btn secondary" data-action="logout">Keluar dari akun peserta</button>':'')
+    +'<div class="auth-switch">'+(administrator?'<button data-go="login">Login Peserta</button>':register?'Sudah terdaftar? <button data-go="login">Masuk</button>':'Belum terdaftar? <button data-go="register">Daftar menggunakan Google</button>')+'</div>'
+    +'<div class="notice" style="margin-top:14px">Login Google tidak otomatis memberikan hak administrator. Admin harus sudah diberi peran oleh pengelola database. '+(administrator?'Tidak ada pendaftaran admin publik.':'Pendaftaran peserta baru dilakukan saat pertama kali login Google.')+'</div>'
+    +'<p style="font-size:12px;margin-top:14px"><a href="/api/health" target="_blank" rel="noopener noreferrer" style="text-decoration:underline;color:#3155c0">Periksa status koneksi database</a></p></div></section>';
 }
 function courseCard(c) {return '<article class="course" data-course="'+c.id+'"><div class="coursecover"><span style="font-size:65px;color:#3157d8">▶</span><span class="tier '+(c.premium?'premium':'')+'">'+(c.premium?'★ Premium':'Gratis')+'</span></div><div class="coursebody"><div class="eyebrow">'+esc(c.category)+' · '+esc(c.level)+'</div><h3>'+esc(c.title)+'</h3><p>'+esc(c.description||'Belajar melalui video YouTube terstruktur.')+'</p><div class="coursefoot"><span>Kursus video</span><b>Lihat Kelas →</b></div></div></article>';}
 function catalog() {
@@ -202,8 +215,6 @@ function render() {
  const names={home:'Beranda',catalog:'Katalog Kursus',mine:'Kelas Saya',detail:'Ruang Belajar',admin:'Dashboard Admin',editor:'Editor Kursus',login:'Login',register:'Daftar','admin-login':'Login Admin'};
  const menu=[['home','▦','Beranda'],['catalog','▤','Katalog Kursus'],...(state.user?[['mine','▣','Kelas Saya']]:[]),...(admin()?[['admin','▥','Dashboard Admin']]:[])];
  $('#app').innerHTML='<div class="layout"><aside class="sidebar '+(state.menu?'open':'')+'"><div class="logo"><div class="logo-mark">🎓</div><div><b>E-COURSE ACADEMY</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div>'+menu.map(([key,icon,name])=>'<button class="navbtn '+(state.view===key?'active':'')+'" data-go="'+key+'"><span style="font-size:20px">'+icon+'</span>'+name+'</button>').join('')+'<div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Video YouTube pilihan, kelas terstruktur, dan progres tersimpan online.</p></div></aside><main class="main"><header class="top"><div style="display:flex;gap:12px;align-items:center"><button class="mobilemenu" data-action="menu">☰</button><div><div class="crumb">Platform Pembelajaran / '+esc(names[state.view])+'</div><strong>Selamat datang di Academy 👋</strong></div></div><div class="topright">'+(state.user?'<span class="user-label">👤 '+esc(state.user.user_metadata?.full_name||state.user.email)+'</span><button class="btn secondary" data-action="logout">Keluar</button>':'<button class="btn secondary" data-go="login">Masuk</button><button class="btn" data-go="register">Daftar</button>')+'</div></header><div class="content">'+views[state.view]()+'</div></main></div>';
- if(state.view==='admin-login' || state.view==='login')$('#authForm').addEventListener('submit',e=>signIn(e,state.view==='admin-login'));
- if(state.view==='register')$('#authForm').addEventListener('submit',signUp);
  if(state.view==='editor')$('#courseForm').addEventListener('submit',saveCourse);
 }
 document.addEventListener('click',async e => {
@@ -216,6 +227,8 @@ document.addEventListener('click',async e => {
  if(t.dataset.delete){await removeCourse(t.dataset.delete);return;}
  if(t.dataset.approve){await approve(t.dataset.approve);return;}
  switch(t.dataset.action){
+ case 'google-admin':await loginGoogle(true);break;
+ case 'google-user':await loginGoogle(false);break;
  case 'enroll':await enroll();break;
  case 'complete':await completeLesson();break;
  case 'next':state.index=Math.min(state.index+1,state.lessons.length-1);render();break;
