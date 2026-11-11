@@ -148,7 +148,18 @@ async function removeCourse(id) {
   if(error)return notice('Tidak dapat menghapus kursus.');
   await loadCatalog();notice('Kursus dihapus.');render();
 }
-function beginEdit(id=null) {if(!admin())return;state.edit=id;go('editor');}
+async function beginEdit(id=null) {
+  if(!admin()) return;
+  state.edit=id;
+  state.editLessons=[];
+  if(id) {
+    const {data,error}=await state.sb.from('academy_lessons')
+      .select('id,title,youtube_id,position').eq('course_id',id).order('position');
+    if(error) return notice('Tidak dapat memuat pelajaran untuk diedit.');
+    state.editLessons=data||[];
+  }
+  go('editor');
+}
 function addLesson() {const box=$('#lessonRows');if(box)box.insertAdjacentHTML('beforeend',lessonRow(box.children.length));}
 function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit"><input required name="lessonTitle" placeholder="Judul pelajaran '+(i+1)+'" value="'+esc(l.title)+'"><input required name="lessonUrl" placeholder="Link video YouTube" value="'+esc(l.youtube_id)+'"><button class="btn secondary" type="button" onclick="this.parentElement.remove()">×</button></div>';}
 function authView(mode) {
@@ -175,7 +186,7 @@ function adminPage() {
 }
 function editor() {
  const c=state.courses.find(c=>c.id===state.edit);
- return '<button class="btn secondary" data-go="admin">← Dashboard Admin</button><div class="panel"><h2>'+(c?'Edit Kursus':'Buat Kursus Baru')+'</h2><form class="form" id="courseForm"><label>Nama Kursus</label><input name="title" maxlength="160" required value="'+esc(c?.title||'')+'"><label>Deskripsi</label><textarea name="description" rows="3">'+esc(c?.description||'')+'</textarea><div class="formrow"><div><label>Kategori</label><select name="category">'+categories.slice(1).map(x=>'<option '+(c?.category===x?'selected':'')+'>'+esc(x)+'</option>').join('')+'</select></div><div><label>Level</label><select name="level">'+['Pemula','Menengah','Mahir','Semua Level'].map(x=>'<option '+(c?.level===x?'selected':'')+'>'+x+'</option>').join('')+'</select></div></div><label class="checkline"><input type="checkbox" name="premium" '+(c?.premium?'checked':'')+'> Premium (persetujuan admin)</label><h3>Video YouTube</h3><p>Setiap URL video menjadi satu pelajaran. Playlist ditambahkan satu per satu.</p><div id="lessonRows">'+lessonRow(0)+'</div><button type="button" class="btn secondary" data-action="add-lesson">+ Pelajaran</button><p><button class="btn" type="submit">Simpan Kursus</button></p></form></div>';
+ return '<button class="btn secondary" data-go="admin">← Dashboard Admin</button><div class="panel"><h2>'+(c?'Edit Kursus':'Buat Kursus Baru')+'</h2><form class="form" id="courseForm"><label>Nama Kursus</label><input name="title" maxlength="160" required value="'+esc(c?.title||'')+'"><label>Deskripsi</label><textarea name="description" rows="3">'+esc(c?.description||'')+'</textarea><div class="formrow"><div><label>Kategori</label><select name="category">'+categories.slice(1).map(x=>'<option '+(c?.category===x?'selected':'')+'>'+esc(x)+'</option>').join('')+'</select></div><div><label>Level</label><select name="level">'+['Pemula','Menengah','Mahir','Semua Level'].map(x=>'<option '+(c?.level===x?'selected':'')+'>'+x+'</option>').join('')+'</select></div></div><label class="checkline"><input type="checkbox" name="premium" '+(c?.premium?'checked':'')+'> Premium (persetujuan admin)</label><h3>Video YouTube</h3><p>Setiap URL video menjadi satu pelajaran. Playlist ditambahkan satu per satu.</p><div id="lessonRows">'+(state.editLessons?.length?state.editLessons.map((l,i)=>lessonRow(i,l)).join(''):lessonRow(0))+'</div><button type="button" class="btn secondary" data-action="add-lesson">+ Pelajaran</button><p><button class="btn" type="submit">Simpan Kursus</button></p></form></div>';
 }
 function render() {
  if(state.loading){$('#app').innerHTML='<div class="empty"><h2>Memuat E-COURSE ACADEMY…</h2></div>';return;}
