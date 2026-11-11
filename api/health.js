@@ -6,7 +6,7 @@ export default async function handler(req,res) {
   const key=process.env.SUPABASE_PUBLISHABLE_KEY||'';
   if(!url||!key) return res.status(503).json({ok:false,stage:'environment',message:'SUPABASE_URL atau SUPABASE_PUBLISHABLE_KEY belum diatur.'});
   if(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url))return res.status(503).json({ok:false,stage:'environment',message:'SUPABASE_URL harus berupa alamat proyek Supabase resmi.'});
-  const headers={apikey:key,Authorization:'Bearer '+key};
+  const headers={apikey:key}; // Publishable keys are not JWTs; never send as Bearer tokens.
   const get=async(path) => {
     try {
       const response=await fetch(url+path,{headers,signal:AbortSignal.timeout(7000)});
