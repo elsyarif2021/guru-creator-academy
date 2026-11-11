@@ -1,29 +1,36 @@
-# E-COURSE ACADEMY — Vercel Frontend
+# E-COURSE ACADEMY
 
-## Deploy ke Vercel
-1. Ekstrak ZIP ini.
-2. Unggah seluruh isi folder ke repository GitHub baru.
-3. Di https://vercel.com/new, pilih repository tersebut dan klik Deploy.
-4. Framework Preset: Other; build command kosong; output directory `.`.
+Vercel frontend + Supabase Auth + PostgreSQL (RLS). Target desain: 10.000 peserta, bukan jaminan kapasitas tanpa load test.
 
-## Fitur
-- Beranda responsif, katalog dengan pencarian dan kategori
-- YouTube embed berdasarkan URL video
-- Pengelolaan kursus: tambah, edit, hapus
-- Kelas gratis dan simulasi pengajuan premium
-- Kelas Saya dan penyimpanan progres
+## Setup wajib
+1. Buat **proyek Supabase baru khusus Academy**, jangan gunakan database proyek lain.
+2. Jalankan file `supabase/schema.sql` di SQL Editor proyek baru. Pastikan tidak ada error.
+3. Aktifkan Email Auth dan konfirmasi email di Supabase; atur Site URL ke domain Vercel final dan redirect URL yang dibutuhkan.
+4. Di Vercel, tetapkan environment variables `SUPABASE_URL` (https://<project>.supabase.co) dan `SUPABASE_PUBLISHABLE_KEY` (kunci publishable publik). **Jangan memasukkan service_role, secret key, atau database password.**
+5. Deploy repository. Periksa /api/config dan login peserta.
+6. Buat tepat dua akun terverifikasi melalui Supabase Authentication -> Users (undang/buat secara aman), lalu ambil UUID masing-masing.
+7. Sebagai pengelola database, jalankan:
+```sql
+insert into public.academy_admins(user_id,role) values
+('UUID_SUPER_ADMIN','super_admin'),
+('UUID_ADMIN_KEDUA','admin');
+```
+Unique role memastikan satu super_admin dan satu admin. Tidak tersedia pendaftaran admin publik.
+8. Login administrator melalui `/admin/login`. Peserta melalui halaman Masuk/Daftar.
 
-## Penting: Mode frontend mandiri
-- Ini adalah frontend **demo fungsional**: data disimpan di localStorage pada masing-masing browser.
-- Pemilihan mode Pengajar/Peserta adalah simulasi, **bukan login aman**.
-- Kursus tidak tersinkron antar perangkat, premium belum diproteksi pada server, dan belum ada pembayaran.
-- Untuk produksi, sambungkan Supabase/Firebase/layanan backend dengan autentikasi, database, RLS dan payment gateway. Jangan menjual kelas premium sebelum akses dijaga pada server.
-- Playlist YouTube perlu dipecah menjadi video individual; pemutaran tergantung izin embed pemilik video.
+## Hak akses
+- Pengunjung bisa membaca katalog terbit (judul dan deskripsi).
+- Peserta baru harus daftar untuk mengikuti kursus. Kursus gratis otomatis disetujui; premium harus disetujui admin.
+- Video hanya dapat dibaca pengguna yang sudah disetujui (dan admin) melalui kebijakan RLS.
+- Admin dapat mengelola kursus, pelajaran, dan permintaan premium.
+- Tabel admin hanya dapat diisi via jalur administrasi DB tepercaya, tidak oleh klien publik.
 
-
-## Login dan daftar peserta (demo lokal)
-- Pengunjung baru memilih **Daftar**, mengisi nama, email, password minimal 8 karakter dan konfirmasi.
-- Akun yang sudah didaftarkan dapat memilih **Masuk**.
-- Akses Kelas Saya meminta login. Progres dibedakan untuk setiap akun di browser yang sama.
-- Akun peserta tidak dapat mengganti peran menjadi pengajar.
-- **Batas keamanan:** akun hanya disimpan pada localStorage browser; ini bukan autentikasi produksi dan tidak berlaku lintas perangkat. Untuk diluncurkan ke pengguna sebenarnya perlu backend autentikasi, database, serta administrasi peran yang aman. Jangan gunakan password penting.
+## Batasan dan keamanan
+- Konfigurasi runtime dari `/api/config` hanya mengembalikan URL dan **publishable** key (keduanya memang boleh tersedia di browser).
+- Autentikasi peserta dikelola Supabase; tidak ada kata sandi yang disimpan di localStorage aplikasi.
+- Tidak ada integrasi pembayaran. Premium berarti permintaan + persetujuan manual.
+- Video YouTube adalah konten eksternal; jika video/playlist dihapus atau menolak embed, pemutaran gagal. URL video di database bukan DRM.
+- Kursus yang diedit mengganti daftar pelajaran dan dapat mereset progres. Cadangkan data sebelum mengubah kursus yang sudah dipakai.
+- Target 10.000 peserta membutuhkan pemeriksaan kuota, index, biaya, rate limit email, dan pengujian beban.
+- Koneksi Supabase belum otomatis dibuat. Tanpa environment variables, UI menampilkan pesan konfigurasi, bukan login palsu.
+- Akun admin harus diprovisi dengan UUID nyata; jangan menaruh email/password admin di file proyek.
