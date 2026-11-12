@@ -165,6 +165,14 @@ function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit
 function authView(mode) {
   const register=mode==='register', administrator=mode==='admin-login';
   const blocked=administrator&&state.user&&!admin();
+  const params=new URLSearchParams(location.search);
+  const oauthError=params.get('error_code')||params.get('error')||'';
+  const oauthExplanation=oauthError==='bad_oauth_callback'?
+    'Callback OAuth tidak valid atau sesi login terputus. Mulai kembali dari tombol Google. Pastikan redirect URI terdaftar dengan benar.':
+    oauthError==='access_denied'?'Permintaan login Google ditolak. Ulangi login dan setujui akses yang diperlukan.':
+    oauthError?'Login Google gagal. Periksa pengaturan Google OAuth di Supabase dan Google Cloud.':'';
+  const oauthNotice=oauthExplanation?'<div class="notice" role="alert" style="margin:12px 0;border:1px solid #edc988">'+esc(oauthExplanation)+' (Kode: '+esc(oauthError.slice(0,60))+')</div>':'';
+
   const intro=administrator?'Hanya untuk Super Admin dan Admin yang sudah ditetapkan di database Academy.':
               register?'Peserta baru dapat mendaftar secara otomatis menggunakan akun Google.':
               'Masuk menggunakan akun Google yang telah Anda pilih.';
@@ -172,6 +180,7 @@ function authView(mode) {
     +'<span class="eyebrow">'+(administrator?'PORTAL ADMINISTRATOR':register?'PENDAFTARAN PESERTA':'AKUN PESERTA')+'</span>'
     +'<h2>'+(administrator?'Login Administrator':register?'Daftar dengan Google':'Masuk dengan Google')+'</h2>'
     +'<p>'+intro+'</p>'
+    +oauthNotice
     +(blocked?'<div class="notice" style="margin:16px 0">Akun Google ini adalah akun peserta, bukan administrator. Admin harus diberikan izin melalui academy_admins. Silakan keluar dan gunakan akun admin yang ditetapkan.</div>':'')
     +'<button class="btn auth-submit" type="button" data-action="'+(administrator?'google-admin':'google-user')+'" style="margin:16px 0;width:100%;justify-content:center;background:#fff;border:1px solid #cfd8e8;color:#263853;font-size:14px"><span aria-hidden="true" style="font-weight:800;color:#4285f4;font-size:20px">G</span> '+(administrator?'Masuk sebagai Admin dengan Google':register?'Daftar dengan Google':'Masuk dengan Google')+' →</button>'
     +(blocked?'<button class="btn secondary" data-action="logout">Keluar dari akun peserta</button>':'')
