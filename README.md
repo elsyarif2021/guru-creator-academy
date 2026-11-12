@@ -33,3 +33,14 @@ insert into public.academy_admins (user_id, role) values
 ```
 
 Satu akun dapat ditetapkan per peran. Jika seorang admin sudah masuk sebelum perannya ditetapkan, buka kembali `/admin` untuk memuat ulang hak aksesnya.
+
+## Migrasi data dari AppDeploy
+
+Unduh arsip JSON melalui **Panel Administrator → Unduh data migrasi**. Jalankan perintah berikut secara lokal setelah email pemilik kursus terverifikasi dan peran admin sudah ditetapkan di Supabase.
+
+```sh
+umask 077
+node scripts/prepare-appdeploy-import.mjs arsip.json admin@example.org > academy-import.sql
+```
+
+Jalankan SQL yang dihasilkan di SQL Editor proyek Supabase Academy. Impor mencocokkan pendaftaran dan progres dengan akun Supabase yang memiliki email terverifikasi. Gunakan ulang arsip yang sama setelah akun yang belum cocok menyelesaikan verifikasi. Impor ulang mempertahankan catatan yang telah ada di tujuan. Simpan arsip dan SQL secara privat karena memuat data peserta.
