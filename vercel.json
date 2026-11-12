@@ -25,5 +25,17 @@
         }
       ]
     }
+  ],
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/kelas-saya",
+      "destination": "/api/student-area"
+    },
+    {
+      "source": "/admin",
+      "destination": "/api/admin-area"
+    }
   ]
 }

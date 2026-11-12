@@ -1,4 +1,3 @@
-
 -- E-COURSE ACADEMY — Supabase schema, run in the NEW academy project.
 -- Never put service_role keys, database passwords or admin passwords in client files.
 create extension if not exists pgcrypto;
@@ -9,7 +8,7 @@ create table if not exists public.academy_admins (
   created_at timestamptz not null default now()
 );
 alter table public.academy_admins enable row level security;
-revoke all on public.academy_admins from anon, authenticated;
+revoke all on public.academy_admins from public, anon, authenticated;
 grant select on public.academy_admins to authenticated;
 drop policy if exists academy_admins_self on public.academy_admins;
 create policy academy_admins_self on public.academy_admins
@@ -59,16 +58,22 @@ alter table public.academy_lessons enable row level security;
 alter table public.academy_enrollments enable row level security;
 alter table public.academy_progress enable row level security;
 
+revoke all on public.academy_courses, public.academy_lessons,
+  public.academy_enrollments, public.academy_progress from public, anon, authenticated;
+
 grant select on public.academy_courses to anon,authenticated;
 grant insert,update,delete on public.academy_courses to authenticated;
 grant select on public.academy_lessons to authenticated;
 grant insert,update,delete on public.academy_lessons to authenticated;
-grant select,insert,update,delete on public.academy_enrollments to authenticated;
+grant select,insert,update on public.academy_enrollments to authenticated;
 grant select,insert on public.academy_progress to authenticated;
 
 drop policy if exists academy_courses_read on public.academy_courses;
 create policy academy_courses_read on public.academy_courses for select
-to anon,authenticated using (published = true or exists
+to anon,authenticated using (published = true);
+drop policy if exists academy_courses_admin_read on public.academy_courses;
+create policy academy_courses_admin_read on public.academy_courses for select
+to authenticated using (exists
   (select 1 from public.academy_admins a where a.user_id = (select auth.uid())));
 drop policy if exists academy_courses_write on public.academy_courses;
 create policy academy_courses_write on public.academy_courses for insert to authenticated
@@ -107,8 +112,8 @@ drop policy if exists academy_enrollments_join on public.academy_enrollments;
 create policy academy_enrollments_join on public.academy_enrollments for insert to authenticated
 with check (user_id = (select auth.uid()) and exists
   (select 1 from public.academy_courses c
-   where c.id = course_id and c.published = true
-   and status = case when c.premium then 'pending' else 'approved' end));
+   where c.id = academy_enrollments.course_id and c.published = true
+   and academy_enrollments.status = case when c.premium then 'pending' else 'approved' end));
 drop policy if exists academy_enrollments_admin_update on public.academy_enrollments;
 create policy academy_enrollments_admin_update on public.academy_enrollments for update to authenticated
 using (exists (select 1 from public.academy_admins a where a.user_id = (select auth.uid())))
@@ -123,7 +128,7 @@ create policy academy_progress_self_insert on public.academy_progress for insert
 with check (user_id = (select auth.uid()) and exists
  (select 1 from public.academy_lessons l
   join public.academy_enrollments e on e.course_id = l.course_id
-  where l.id = lesson_id and e.user_id = (select auth.uid()) and e.status='approved'));
+  where l.id = academy_progress.lesson_id and e.user_id = (select auth.uid()) and e.status='approved'));
 -- No participant update/delete of progress records.
 -- Admin slot provisioning: first create TWO accounts in Supabase Auth,
 -- then replace the UUID placeholders and execute these inserts in SQL Editor:

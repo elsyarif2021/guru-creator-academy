@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
+import { createBrowserClient } from '@supabase/ssr';
 
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -6,47 +6,152 @@ const categories = ['Semua','Pendidikan','Teknologi & AI','Desain','Bisnis','Bah
 const state = { sb:null, user:null, role:'peserta', view:'home', courses:[], lessons:[], enrollments:[], progress:[], requests:[], current:null, index:0, filter:'Semua', query:'', edit:null, menu:false, loading:true, error:'' };
 const admin = () => ['admin','super_admin'].includes(state.role);
 const superAdmin = () => state.role === 'super_admin';
-const go = (view) => { state.view=view; if(view==='admin' && !admin()) state.view='admin-login'; if(view==='mine' && !state.user) state.view='login'; state.menu=false; location.hash = '#'+state.view; render(); };
+const paths = {
+  home: '/', catalog: '/#catalog', detail: '/#detail', mine: '/kelas-saya',
+  login: '/login', register: '/daftar', 'admin-login': '/admin/login', admin: '/admin', editor: '/admin'
+};
+const protectedViews = ['mine', 'admin', 'editor'];
+let sessionCheck = 0;
+
+function requestedView() {
+  const pathname = location.pathname.replace(/\.html$/, '').replace(/\/$/, '') || '/';
+  if (pathname !== '/') {
+    return Object.keys(paths).find(view => paths[view] === pathname) || 'home';
+  }
+  const hash = location.hash.slice(1);
+  return ['catalog', 'mine', 'login', 'register', 'admin-login', 'admin'].includes(hash) ? hash : 'home';
+}
+
+function permittedView(view) {
+  if (view === 'mine' && !state.user) return 'login';
+  if (['admin', 'editor'].includes(view) && !admin()) return 'admin-login';
+  return view;
+}
+
+function go(view) {
+  view = permittedView(view);
+  const path = paths[view];
+  if (protectedViews.includes(view) && location.pathname !== path) {
+    location.assign(path);
+    return;
+  }
+  if (location.pathname + location.search + location.hash !== path) history.pushState(null, '', path);
+  state.view = view;
+  state.menu = false;
+  state.oauthError = '';
+  render();
+}
 const notice = (message) => { const n=document.createElement('div'); n.className='toast'; n.textContent=message; document.body.append(n); setTimeout(()=>n.remove(),4500); };
 const youtube = (raw) => { try { const u=new URL(raw); if(!['youtube.com','www.youtube.com','m.youtube.com','youtu.be','www.youtube-nocookie.com'].includes(u.hostname)) return ''; const v = u.hostname === 'youtu.be' ? u.pathname.split('/')[1] : u.searchParams.get('v') || u.pathname.match(/\/(?:shorts|embed|live)\/([^/]+)/)?.[1]; return /^[\w-]{11}$/.test(v||'')?v:''; } catch { return /^[\w-]{11}$/.test(raw)?raw:''; } };
 async function init() {
+  const requested = requestedView();
+  const params = new URLSearchParams(location.search);
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const code = params.get('code');
+  state.oauthError = params.get('error_code') || params.get('error') ||
+    fragment.get('error_code') || fragment.get('error') || '';
+  const returning = Boolean(code || state.oauthError);
   try {
-    const response = await fetch('/api/config',{cache:'no-store'});
-    if(!response.ok) throw new Error('Koneksi Supabase belum disiapkan. Administrator perlu mengisi SUPABASE_URL dan SUPABASE_PUBLISHABLE_KEY di Vercel.');
-    const conf = await response.json();
-    if(!conf.configured) throw new Error('Supabase belum terhubung.');
-    state.sb = createClient(conf.url, conf.key, {auth:{autoRefreshToken:true,persistSession:true,detectSessionInUrl:true}});
-    const {data:{session}} = await state.sb.auth.getSession();
-    await setSession(session);
-    state.sb.auth.onAuthStateChange((_event,s) => { queueMicrotask(async()=> { await setSession(s); render(); }); });
-    const requested=location.pathname.startsWith('/admin/login')?'admin-login':location.pathname==='/login'?'login':location.pathname==='/daftar'?'register':location.hash.slice(1);
-    if(['home','catalog','mine','admin','login','register','admin-login'].includes(requested))state.view=requested;
-    if(state.view==='admin'&&!admin())state.view='admin-login';
-    if(state.view==='mine'&&!state.user)state.view='login';
-    // Return from Google authentication: preserve requested audience, check database role.
-    const intent=sessionStorage.getItem('academy_oauth_intent');
-    if(intent && state.user){
-      sessionStorage.removeItem('academy_oauth_intent');
-      if(intent==='admin'){
-        state.view=admin()?'admin':'admin-login';
-        if(admin())await loadRequests();
-      }else{
-        state.view='mine';
-        await loadMine();
-      }
-      location.hash='#'+state.view;
+    if (!returning && protectedViews.includes(requested) && location.pathname !== paths[requested]) {
+      location.replace(paths[requested]);
+      return;
     }
-    await loadCatalog();
-  } catch(e) {state.error=e.message || 'Gagal menyiapkan aplikasi.';}
-  state.loading=false; render();
-}
-async function setSession(session) {
-  state.user=session?.user || null;
-  state.role='peserta';
-  if(state.user) {
-    const {data,error}=await state.sb.from('academy_admins').select('role').eq('user_id',state.user.id).maybeSingle();
-    if(!error && data?.role)state.role=data.role;
+
+    const response = await fetch('/api/config', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Koneksi Supabase belum disiapkan di Vercel.');
+    const conf = await response.json();
+    if (!conf.configured) throw new Error('Supabase belum terhubung.');
+    state.sb = createBrowserClient(conf.url, conf.key, {
+      auth: { detectSessionInUrl: false },
+      cookieOptions: { secure: location.protocol === 'https:' }
+    });
+
+    const intent = returning ? sessionStorage.getItem('academy_oauth_intent') : null;
+    if (returning) sessionStorage.removeItem('academy_oauth_intent');
+    const adminLogin = requested === 'admin-login' || (requested === 'home' && intent === 'admin');
+    const loginView = adminLogin ? 'admin-login' : requested === 'register' ? 'register' : 'login';
+    if (code && !state.oauthError) {
+      const { error } = await state.sb.auth.exchangeCodeForSession(code);
+      if (error) state.oauthError = 'oauth_exchange_failed';
+    }
+    if (returning) history.replaceState(null, '', paths[loginView]);
+
+    await setSession();
+    if (code && !state.oauthError) {
+      if (state.user) {
+        location.replace(adminLogin ? paths.admin : paths.mine);
+        return;
+      }
+      state.oauthError = 'oauth_exchange_failed';
+    }
+
+    state.view = returning ? loginView : permittedView(requested);
+    if (!returning && requested !== state.view) {
+      location.replace(paths[state.view]);
+      return;
+    }
+    await Promise.all([
+      loadCatalog(),
+      state.view === 'mine' ? loadMine() : undefined,
+      state.view === 'admin' ? loadRequests() : undefined
+    ]);
+    state.sb.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setSession(true);
+        const view = permittedView(state.view);
+        if (view !== state.view) location.replace(paths[view]);
+        else {
+          render();
+          setTimeout(async () => {
+            await loadCatalog();
+            render();
+          }, 0);
+        }
+      } else if (event === 'SIGNED_IN' && session?.user?.id !== state.user?.id) {
+        setTimeout(async () => {
+          try {
+            await setSession();
+            await loadCatalog();
+          } catch {
+            notice('Sesi belum dapat diverifikasi. Muat ulang halaman.');
+          }
+          render();
+        }, 0);
+      }
+    });
+  } catch (error) {
+    state.error = error.message || 'Gagal menyiapkan aplikasi.';
   }
+  state.loading = false;
+  render();
+}
+
+async function setSession(signedOut = false) {
+  const check = ++sessionCheck;
+  let user = null;
+  let role = 'peserta';
+  if (!signedOut) {
+    const { data, error } = await state.sb.auth.getUser();
+    if (error && (error.status === 0 || error.status === 429 || error.status >= 500)) {
+      throw new Error('Layanan autentikasi sedang tidak tersedia. Coba lagi.');
+    }
+    if (!error && !data.user?.is_anonymous) user = data.user;
+    if (user) {
+      const { data: permission, error: roleError } = await state.sb.from('academy_admins')
+        .select('role').eq('user_id', user.id).maybeSingle();
+      if (roleError && ['admin', 'admin-login'].includes(requestedView())) {
+        throw new Error('Izin administrator belum dapat diperiksa. Coba lagi.');
+      }
+      if (['super_admin', 'admin'].includes(permission?.role)) role = permission.role;
+    }
+  }
+  if (check !== sessionCheck) return;
+  if (user?.id !== state.user?.id || role !== state.role) {
+    Object.assign(state, { courses: [], enrollments: [], progress: [], requests: [], lessons: [],
+      current: null, index: 0, edit: null, editLessons: [] });
+  }
+  state.user = user;
+  state.role = role;
 }
 async function loadCatalog() {
   if(!state.sb)return;
@@ -83,18 +188,27 @@ async function openCourse(id) {
   }
   go('detail');
 }
-async function loginGoogle(isAdmin=false) {
-  if(!state.sb)return notice('Koneksi Supabase belum siap.');
-  // Only authorization stored in academy_admins can elevate a Google account.
-  const returnPath=isAdmin?'/admin/login':'/login';
-  sessionStorage.setItem('academy_oauth_intent',isAdmin?'admin':'peserta');
-  const {error}=await state.sb.auth.signInWithOAuth({
-    provider:'google',
-    options:{redirectTo:location.origin+returnPath,queryParams:{prompt:'select_account'}}
+async function loginGoogle(isAdmin = false) {
+  if (!state.sb) return notice('Koneksi Supabase belum siap.');
+  const returnPath = isAdmin ? paths['admin-login'] : paths.login;
+  sessionStorage.setItem('academy_oauth_intent', isAdmin ? 'admin' : 'peserta');
+  const { error } = await state.sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: location.origin + returnPath, queryParams: { prompt: 'select_account' } }
   });
-  if(error)notice('Login Google tidak tersedia: '+error.message);
+  if (error) {
+    sessionStorage.removeItem('academy_oauth_intent');
+    notice('Login Google tidak tersedia: ' + error.message);
+  }
 }
-async function signOut() {await state.sb.auth.signOut();state.user=null;state.role='peserta';state.enrollments=[];state.lessons=[];go('home');}
+
+async function signOut() {
+  const { error } = await state.sb.auth.signOut({ scope: 'local' });
+  if (error) return notice('Gagal keluar. Silakan coba kembali.');
+  sessionStorage.removeItem('academy_oauth_intent');
+  await setSession(true);
+  location.replace(paths.home);
+}
 async function enroll() {
   if(!state.user)return go('login');
   if(!state.current)return;
@@ -165,12 +279,16 @@ function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit
 function authView(mode) {
   const register=mode==='register', administrator=mode==='admin-login';
   const blocked=administrator&&state.user&&!admin();
-  const params=new URLSearchParams(location.search);
-  const oauthError=params.get('error_code')||params.get('error')||'';
-  const oauthExplanation=oauthError==='bad_oauth_callback'?
-    'Callback OAuth tidak valid atau sesi login terputus. Mulai kembali dari tombol Google. Pastikan redirect URI terdaftar dengan benar.':
-    oauthError==='access_denied'?'Permintaan login Google ditolak. Ulangi login dan setujui akses yang diperlukan.':
-    oauthError?'Login Google gagal. Periksa pengaturan Google OAuth di Supabase dan Google Cloud.':'';
+  const oauthError = state.oauthError;
+  const oauthMessages = {
+    admin_required: 'Akun Google ini belum diberi akses administrator. Gunakan akun yang sudah ditetapkan.',
+    bad_oauth_callback: 'Sesi login Google terputus. Mulai lagi dari tombol Google di halaman ini.',
+    oauth_exchange_failed: 'Kode login Google tidak dapat dipakai. Mulai lagi di browser yang sama.',
+    access_denied: 'Permintaan login Google ditolak. Ulangi login dan setujui akses yang diperlukan.'
+  };
+  const oauthExplanation = oauthError
+    ? Object.hasOwn(oauthMessages, oauthError) ? oauthMessages[oauthError] : 'Login Google gagal. Mulai ulang dari tombol Google.'
+    : '';
   const oauthNotice=oauthExplanation?'<div class="notice" role="alert" style="margin:12px 0;border:1px solid #edc988">'+esc(oauthExplanation)+' (Kode: '+esc(oauthError.slice(0,60))+')</div>':'';
 
   const intro=administrator?'Hanya untuk Super Admin dan Admin yang sudah ditetapkan di database Academy.':
@@ -181,7 +299,7 @@ function authView(mode) {
     +'<h2>'+(administrator?'Login Administrator':register?'Daftar dengan Google':'Masuk dengan Google')+'</h2>'
     +'<p>'+intro+'</p>'
     +oauthNotice
-    +(blocked?'<div class="notice" style="margin:16px 0">Akun Google ini adalah akun peserta, bukan administrator. Admin harus diberikan izin melalui academy_admins. Silakan keluar dan gunakan akun admin yang ditetapkan.</div>':'')
+    +(blocked&&oauthError!=='admin_required'?'<div class="notice" style="margin:16px 0">Akun Google ini belum diberi akses administrator. Pilih akun Google yang sudah ditetapkan.</div>':'')
     +'<button class="btn auth-submit" type="button" data-action="'+(administrator?'google-admin':'google-user')+'" style="margin:16px 0;width:100%;justify-content:center;background:#fff;border:1px solid #cfd8e8;color:#263853;font-size:14px"><span aria-hidden="true" style="font-weight:800;color:#4285f4;font-size:20px">G</span> '+(administrator?'Masuk sebagai Admin dengan Google':register?'Daftar dengan Google':'Masuk dengan Google')+' →</button>'
     +(blocked?'<button class="btn secondary" data-action="logout">Keluar dari akun peserta</button>':'')
     +'<div class="auth-switch">'+(administrator?'<button data-go="login">Login Peserta</button>':register?'Sudah terdaftar? <button data-go="login">Masuk</button>':'Belum terdaftar? <button data-go="register">Daftar menggunakan Google</button>')+'</div>'
@@ -219,7 +337,7 @@ function render() {
 }
  const allowed=['home','catalog','mine','detail','admin','editor','login','register','admin-login'];
  if(!allowed.includes(state.view))state.view='home';
- if(['admin','editor'].includes(state.view)&&!admin())state.view='admin-login';
+ state.view=permittedView(state.view);
  const views={home,catalog,mine,detail,admin:adminPage,editor,login:()=>authView('login'),register:()=>authView('register'),'admin-login':()=>authView('admin-login')};
  const names={home:'Beranda',catalog:'Katalog Kursus',mine:'Kelas Saya',detail:'Ruang Belajar',admin:'Dashboard Admin',editor:'Editor Kursus',login:'Login',register:'Daftar','admin-login':'Login Admin'};
  const menu=[['home','▦','Beranda'],['catalog','▤','Katalog Kursus'],...(state.user?[['mine','▣','Kelas Saya']]:[]),...(admin()?[['admin','▥','Dashboard Admin']]:[])];
@@ -228,7 +346,7 @@ function render() {
 }
 document.addEventListener('click',async e => {
  const t=e.target.closest('button,[data-course]');if(!t)return;
- if(t.dataset.go){go(t.dataset.go);if(t.dataset.go==='mine')await loadMine();if(t.dataset.go==='admin')await loadRequests();render();return;}
+ if(t.dataset.go){go(t.dataset.go);return;}
  if(t.dataset.course){await openCourse(t.dataset.course);return;}
  if(t.dataset.lesson!==undefined){state.index=Number(t.dataset.lesson);render();return;}
  if(t.dataset.category){state.filter=t.dataset.category;render();return;}
@@ -248,5 +366,18 @@ document.addEventListener('click',async e => {
  }
 });
 document.addEventListener('input',e=>{if(e.target.id==='searchBox'){state.query=e.target.value;const box=$('.content');box.innerHTML=catalog();const input=$('#searchBox');input.focus();input.setSelectionRange(input.value.length,input.value.length);}});
-window.addEventListener('hashchange',()=>{const v=location.hash.slice(1);if(['home','catalog','mine','admin','login','register','admin-login'].includes(v)){state.view=v;render();}});
+function restoreRoute() {
+  const requested = requestedView();
+  const view = permittedView(requested);
+  if (protectedViews.includes(requested)) {
+    if (location.pathname === paths[requested] && !location.hash) location.reload();
+    else location.replace(paths[requested]);
+    return;
+  }
+  state.view = view;
+  state.oauthError = '';
+  render();
+}
+window.addEventListener('popstate', restoreRoute);
+window.addEventListener('hashchange', restoreRoute);
 init();
