@@ -11,18 +11,19 @@ export default async function handler(req,res) {
     try {
       const response=await fetch(url+path,{headers,signal:AbortSignal.timeout(7000)});
       let data={};try{data=await response.json()}catch{}
-      return {status:response.status,ok:response.ok,code:String(data.code||data.error_code||data.message||'').slice(0,100)};
+      return {status:response.status,ok:response.ok,code:String(data.code||data.error_code||data.message||'').slice(0,100),googleEnabled:typeof data?.external?.google==='boolean'?data.external.google:null};
     } catch { return {status:0,ok:false,code:'network_or_timeout'}; }
   };
   const auth=await get('/auth/v1/settings');
   const courses=await get('/rest/v1/academy_courses?select=id&limit=1');
   return res.status(auth.ok&&courses.ok?200:503).json({
     ok:auth.ok&&courses.ok,project:url.match(/https:\/\/([^.]+)/)?.[1],
-    auth:{ready:auth.ok,status:auth.status,code:auth.ok?undefined:auth.code},
+    auth:{ready:auth.ok,status:auth.status,googleEnabled:auth.googleEnabled,code:auth.ok?undefined:auth.code},
     schema:{coursesReady:courses.ok,status:courses.status,code:courses.ok?undefined:courses.code},
     nextStep:!auth.ok?'Periksa project URL, publishable key, dan pengaturan Auth Supabase.':
+      auth.googleEnabled===false?'Aktifkan Google Provider di Supabase dan daftarkan callback URI Supabase pada Google Cloud OAuth Client.':
       !courses.ok?'Jalankan supabase/schema.sql di SQL Editor proyek Academy, kemudian periksa RLS dan GRANT.':
       'Auth dan katalog tersedia. Untuk administrator, buat dua akun Auth lalu isi academy_admins menggunakan UUID akun.',
-    note:'Hasil ini tidak memeriksa login pengguna sungguhan atau semua kebijakan RLS.'
+    note:'Google enabled hanya status provider, bukan bukti redirect URI Google benar. Hasil ini tidak memeriksa login pengguna sungguhan atau semua kebijakan RLS.'
   });
 }
