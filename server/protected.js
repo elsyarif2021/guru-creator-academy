@@ -6,7 +6,7 @@ const shell = `<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#1b3db6">
-  <title>E-COURSE ACADEMY</title>
+  <title>Guru Creator Academy</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>

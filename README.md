@@ -1,4 +1,4 @@
-# E-COURSE ACADEMY
+# Guru Creator Academy
 
 Aplikasi kursus YouTube dengan Google Sign-In, Vercel Functions, dan Supabase PostgreSQL.
 

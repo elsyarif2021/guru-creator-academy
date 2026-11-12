@@ -1,4 +1,4 @@
-// Public diagnostics for E-COURSE ACADEMY. Never returns secrets or user data.
+// Public diagnostics for Guru Creator Academy. Never returns secrets or user data.
 export default async function handler(req,res) {
   res.setHeader('Cache-Control','no-store');
   if(req.method!=='GET') return res.status(405).json({ok:false,message:'Method not allowed'});
