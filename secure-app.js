@@ -1,4 +1,5 @@
 import { createBrowserClient } from '@supabase/ssr';
+import { verifiedSession, exchangeCallback } from './auth-client.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -12,6 +13,9 @@ const paths = {
 };
 const protectedViews = ['mine', 'admin', 'editor'];
 let sessionCheck = 0;
+let dataVersion = 0;
+let authBusy = false;
+let authRefresh = Promise.resolve();
 
 function requestedView() {
   const pathname = location.pathname.replace(/\.html$/, '').replace(/\/$/, '') || '/';
@@ -63,7 +67,40 @@ async function init() {
     if (!conf.configured) throw new Error('Supabase belum terhubung.');
     state.sb = createBrowserClient(conf.url, conf.key, {
       auth: { detectSessionInUrl: false },
-      cookieOptions: { secure: location.protocol === 'https:' }
+      cookieOptions: { path: '/', sameSite: 'lax', secure: location.protocol === 'https:' }
+    });
+
+    // Supabase may hold its session lock inside this listener. Schedule work,
+    // rather than awaiting another auth operation in the callback.
+    state.sb.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        void setSession(true);
+        if (!state.loading) {
+          const view = permittedView(state.view);
+          if (view !== state.view) location.replace(paths[view]);
+          else render();
+        }
+      } else if (!state.loading && ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED'].includes(event)) {
+        setTimeout(() => {
+          authRefresh = authRefresh.then(async () => {
+            const previousUser = state.user?.id;
+            try {
+              await setSession();
+              const view = permittedView(state.view);
+              if (view !== state.view) return location.replace(paths[view]);
+              if (state.user?.id !== previousUser) {
+                await Promise.all([loadCatalog(), state.view === 'mine' ? loadMine() : undefined,
+                  state.view === 'admin' ? loadRequests() : undefined]);
+              }
+              render();
+            } catch (error) {
+              await setSession(true);
+              state.error = error.message;
+              render();
+            }
+          });
+        }, 0);
+      }
     });
 
     const intent = returning ? sessionStorage.getItem('academy_oauth_intent') : null;
@@ -71,8 +108,7 @@ async function init() {
     const adminLogin = requested === 'admin-login' || (requested === 'home' && intent === 'admin');
     const loginView = adminLogin ? 'admin-login' : requested === 'register' ? 'register' : 'login';
     if (code && !state.oauthError) {
-      const { error } = await state.sb.auth.exchangeCodeForSession(code);
-      if (error) state.oauthError = 'oauth_exchange_failed';
+      state.oauthError = await exchangeCallback(state.sb, params) || '';
     }
     if (returning) history.replaceState(null, '', paths[loginView]);
 
@@ -95,30 +131,7 @@ async function init() {
       state.view === 'mine' ? loadMine() : undefined,
       state.view === 'admin' ? loadRequests() : undefined
     ]);
-    state.sb.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        setSession(true);
-        const view = permittedView(state.view);
-        if (view !== state.view) location.replace(paths[view]);
-        else {
-          render();
-          setTimeout(async () => {
-            await loadCatalog();
-            render();
-          }, 0);
-        }
-      } else if (event === 'SIGNED_IN' && session?.user?.id !== state.user?.id) {
-        setTimeout(async () => {
-          try {
-            await setSession();
-            await loadCatalog();
-          } catch {
-            notice('Sesi belum dapat diverifikasi. Muat ulang halaman.');
-          }
-          render();
-        }, 0);
-      }
-    });
+
   } catch (error) {
     state.error = error.message || 'Gagal menyiapkan aplikasi.';
   }
@@ -131,22 +144,12 @@ async function setSession(signedOut = false) {
   let user = null;
   let role = 'peserta';
   if (!signedOut) {
-    const { data, error } = await state.sb.auth.getUser();
-    if (error && (error.status === 0 || error.status === 429 || error.status >= 500)) {
-      throw new Error('Layanan autentikasi sedang tidak tersedia. Coba lagi.');
-    }
-    if (!error && !data.user?.is_anonymous) user = data.user;
-    if (user) {
-      const { data: permission, error: roleError } = await state.sb.from('academy_admins')
-        .select('role').eq('user_id', user.id).maybeSingle();
-      if (roleError && ['admin', 'admin-login'].includes(requestedView())) {
-        throw new Error('Izin administrator belum dapat diperiksa. Coba lagi.');
-      }
-      if (['super_admin', 'admin'].includes(permission?.role)) role = permission.role;
-    }
+    ({ user, role } = await verifiedSession(state.sb));
   }
+
   if (check !== sessionCheck) return;
   if (user?.id !== state.user?.id || role !== state.role) {
+    dataVersion++;
     Object.assign(state, { courses: [], enrollments: [], progress: [], requests: [], lessons: [],
       current: null, index: 0, edit: null, editLessons: [] });
   }
@@ -155,34 +158,43 @@ async function setSession(signedOut = false) {
 }
 async function loadCatalog() {
   if(!state.sb)return;
+  const check = dataVersion;
   const {data,error}=await state.sb.from('academy_courses').select('id,title,description,category,level,premium,published,created_at').order('created_at',{ascending:false}).limit(200);
+  if(check !== dataVersion)return;
   if(error) {notice('Gagal memuat kursus: '+error.message);return;}
   state.courses=data || [];
 }
 async function loadMine() {
   if(!state.user)return;
+  const check = dataVersion;
   const [e,p] = await Promise.all([
     state.sb.from('academy_enrollments').select('id,course_id,status,user_id').eq('user_id',state.user.id),
     state.sb.from('academy_progress').select('lesson_id').eq('user_id',state.user.id)
   ]);
+  if(check !== dataVersion)return;
   if(e.error || p.error)notice('Gagal memuat progres kelas.');
   state.enrollments=e.data||[];state.progress=p.data||[];
 }
 async function loadRequests() {
   if(!admin())return;
+  const check = dataVersion;
   const {data,error}=await state.sb.from('academy_enrollments').select('id,course_id,user_id,status,created_at').eq('status','pending').order('created_at',{ascending:true}).limit(100);
+  if(check !== dataVersion)return;
   if(error) notice('Tidak dapat memuat pengajuan.');
   state.requests=data||[];
 }
 async function openCourse(id) {
+  const check = dataVersion;
   state.current=state.courses.find(x=>x.id===id);
   if(!state.current)return;
   state.index=0;
   state.lessons=[];
   await loadMine();
+  if(check !== dataVersion)return;
   const enrollment=state.enrollments.find(x=>x.course_id===id && x.status==='approved');
   if(admin() || enrollment) {
     const {data,error}=await state.sb.from('academy_lessons').select('id,course_id,title,youtube_id,position').eq('course_id',id).order('position');
+    if(check !== dataVersion)return;
     if(!error)state.lessons=data||[];
     else notice('Belum dapat membuka video. Pastikan akses sudah disetujui.');
   }
@@ -190,15 +202,24 @@ async function openCourse(id) {
 }
 async function loginGoogle(isAdmin = false) {
   if (!state.sb) return notice('Koneksi Supabase belum siap.');
-  const returnPath = isAdmin ? paths['admin-login'] : paths.login;
-  sessionStorage.setItem('academy_oauth_intent', isAdmin ? 'admin' : 'peserta');
-  const { error } = await state.sb.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: location.origin + returnPath, queryParams: { prompt: 'select_account' } }
-  });
-  if (error) {
+  if (authBusy) return;
+  authBusy = true;
+  const buttons = document.querySelectorAll('[data-action="google-admin"],[data-action="google-user"]');
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const returnPath = isAdmin ? paths['admin-login'] : paths.login;
+    sessionStorage.setItem('academy_oauth_intent', isAdmin ? 'admin' : 'peserta');
+    const { error } = await state.sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: location.origin + returnPath, queryParams: { prompt: 'select_account' } }
+    });
+    if (error) throw error;
+  } catch (error) {
     sessionStorage.removeItem('academy_oauth_intent');
     notice('Login Google tidak tersedia: ' + error.message);
+  } finally {
+    authBusy = false;
+    buttons.forEach(button => { button.disabled = false; });
   }
 }
 
@@ -332,7 +353,7 @@ function render() {
  if(state.loading){$('#app').innerHTML='<div class="empty"><h2>Memuat Guru Creator Academy…</h2></div>';return;}
  if(state.error){
   // Public landing page remains visible, but no fake account creation or premium access.
-  $('#app').innerHTML='<div class="layout"><aside class="sidebar"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div><div class="navbtn active">▦ Beranda</div><div class="navbtn">▤ Katalog Kursus</div><div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Materi YouTube terstruktur, kelas gratis dan premium.</p></div></aside><main class="main"><header class="top"><div><div class="crumb">Platform Pembelajaran / Beranda</div><strong>Selamat datang di Academy 👋</strong></div><span style="color:#a05e05;font-size:12px">● Pengaturan diperlukan</span></header><div class="content"><section class="hero"><div><div class="pill">✦ Platform Belajar Digital</div><h1>Belajar Hal Baru,<br><span>Berbagi Manfaat</span><br>untuk Semua.</h1><p>Platform kursus online dengan video YouTube, kelas gratis dan premium, serta progres belajar.</p></div><div class="hero-graphic">🎓</div></section><section class="panel" style="margin-top:24px;border:1px solid #f2d399;background:#fffcf5"><h2>🔧 Aktivasi Database Diperlukan</h2><p>'+esc(state.error)+'</p><p>Pendaftaran peserta, login administrator dan katalog online belum dapat digunakan sebelum Supabase dikonfigurasi.</p><p><strong>Untuk pengelola:</strong> buat proyek Supabase khusus Academy, jalankan <code>supabase/schema.sql</code>, lalu tambahkan <code>SUPABASE_URL</code> dan <code>SUPABASE_PUBLISHABLE_KEY</code> di Vercel → Settings → Environment Variables. Deploy ulang setelah selesai.</p></section><section class="features"><div class="feature"><span>▶️</span><h3>Materi YouTube</h3><p>Video dikelompokkan berdasarkan kursus.</p></div><div class="feature"><span>🎓</span><h3>Kelas Terstruktur</h3><p>Kursus gratis dan premium untuk peserta terdaftar.</p></div><div class="feature"><span>✅</span><h3>Progres Belajar</h3><p>Riwayat belajar tersimpan di database setelah aktivasi.</p></div></section></div></main></div>';
+  $('#app').innerHTML='<div class="layout"><aside class="sidebar"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div><div class="navbtn active">▦ Beranda</div><div class="navbtn">▤ Katalog Kursus</div><div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Materi YouTube terstruktur, kelas gratis dan premium.</p></div></aside><main class="main"><header class="top"><div><div class="crumb">Platform Pembelajaran / Beranda</div><strong>Selamat datang di Academy 👋</strong></div><span style="color:#a05e05;font-size:12px">● Pengaturan diperlukan</span></header><div class="content"><section class="hero"><div><div class="pill">✦ Platform Belajar Digital</div><h1>Belajar Hal Baru,<br><span>Berbagi Manfaat</span><br>untuk Semua.</h1><p>Platform kursus online dengan video YouTube, kelas gratis dan premium, serta progres belajar.</p></div><div class="hero-graphic">🎓</div></section><section class="panel" style="margin-top:24px;border:1px solid #f2d399;background:#fffcf5"><h2>🔧 Koneksi belum dapat diverifikasi</h2><p>'+esc(state.error)+'</p><p>Sesi akun atau layanan database belum dapat diperiksa. Data privat tidak ditampilkan sampai koneksi terverifikasi.</p><p><a href="/api/health" target="_blank" rel="noopener">Periksa status koneksi</a>, lalu coba kembali. Pengelola dapat memeriksa konfigurasi deployment bila masalah berlanjut.</p><button class="btn" data-action="retry">Coba lagi</button></section><section class="features"><div class="feature"><span>▶️</span><h3>Materi YouTube</h3><p>Video dikelompokkan berdasarkan kursus.</p></div><div class="feature"><span>🎓</span><h3>Kelas Terstruktur</h3><p>Kursus gratis dan premium untuk peserta terdaftar.</p></div><div class="feature"><span>✅</span><h3>Progres Belajar</h3><p>Riwayat belajar tersimpan di database setelah aktivasi.</p></div></section></div></main></div>';
   return;
 }
  const allowed=['home','catalog','mine','detail','admin','editor','login','register','admin-login'];
@@ -363,6 +384,7 @@ document.addEventListener('click',async e => {
  case 'add-lesson':addLesson();break;
  case 'logout':await signOut();break;
  case 'menu':state.menu=!state.menu;render();break;
+ case 'retry':location.reload();break;
  }
 });
 document.addEventListener('input',e=>{if(e.target.id==='searchBox'){state.query=e.target.value;const box=$('.content');box.innerHTML=catalog();const input=$('#searchBox');input.focus();input.setSelectionRange(input.value.length,input.value.length);}});

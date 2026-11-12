@@ -1,4 +1,4 @@
-import { createServerClient, parseCookieHeader, serializeCookieHeader } from '@supabase/ssr';
+import { createRequestClient, privateResponse, readSession } from './session.js';
 
 const shell = `<!DOCTYPE html>
 <html lang="id">
@@ -16,7 +16,7 @@ const shell = `<!DOCTYPE html>
 </html>`;
 
 export async function serveProtected(req, res, administrator) {
-  res.setHeader('Cache-Control', 'private, no-store');
+  privateResponse(res);
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.setHeader('Allow', 'GET, HEAD');
     return res.status(405).end();
@@ -24,39 +24,14 @@ export async function serveProtected(req, res, administrator) {
 
   const login = administrator ? '/admin/login' : '/login';
 
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !key) return res.status(503).send('Koneksi Supabase belum dikonfigurasi.');
-
-  const cookies = new Map(parseCookieHeader(req.headers.cookie ?? '').map(({ name, value }) => [name, value]));
-  const outgoing = new Map();
-  const supabase = createServerClient(url, key, {
-    cookieOptions: { secure: process.env.VERCEL === '1' },
-    cookies: {
-      getAll: () => Array.from(cookies, ([name, value]) => ({ name, value })),
-      setAll(entries) {
-        for (const { name, value, options } of entries) {
-          cookies.set(name, value);
-          outgoing.set(name, serializeCookieHeader(name, value, options));
-        }
-        res.setHeader('Set-Cookie', [...outgoing.values()]);
-      }
-    }
-  });
-
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error && (error.status === 429 || error.status >= 500)) {
-    return res.status(503).send('Layanan autentikasi sedang tidak tersedia.');
-  }
-  if (!user || user.is_anonymous) return res.redirect(307, login);
-
-  if (administrator) {
-    const { data, error: roleError } = await supabase.from('academy_admins')
-      .select('role').eq('user_id', user.id).maybeSingle();
-    if (roleError) return res.status(503).send('Izin administrator belum dapat diperiksa.');
-    if (!['super_admin', 'admin'].includes(data?.role)) {
+  try {
+    const session = await readSession(createRequestClient(req, res));
+    if (!session) return res.redirect(307, login);
+    if (administrator && !['super_admin', 'admin'].includes(session.role)) {
       return res.redirect(307, login + '?error_code=admin_required');
     }
+  } catch (error) {
+    return res.status(503).send(error.code ? error.message : 'Koneksi Supabase belum dikonfigurasi dengan benar.');
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');

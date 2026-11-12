@@ -44,3 +44,41 @@ node scripts/prepare-appdeploy-import.mjs arsip.json admin@example.org > academy
 ```
 
 Jalankan SQL yang dihasilkan di SQL Editor proyek Supabase Academy. Impor mencocokkan pendaftaran dan progres dengan akun Supabase yang memiliki email terverifikasi. Gunakan ulang arsip yang sama setelah akun yang belum cocok menyelesaikan verifikasi. Impor ulang mempertahankan catatan yang telah ada di tujuan. Simpan arsip dan SQL secara privat karena memuat data peserta.
+
+## Perbaikan integrasi autentikasi
+
+Frontend dan halaman terlindungi memakai pemeriksaan sesi server yang sama:
+
+1. Browser menuntaskan Google OAuth PKCE dan menulis cookie Supabase.
+2. Browser memperbarui cookie bila token kedaluwarsa, lalu meminta `GET /api/session` dengan cookie origin yang sama.
+3. Backend memverifikasi identitas dengan Supabase Auth `getUser()`, lalu membaca peran dari `academy_admins` menggunakan sesi pengguna tersebut. Tidak ada `service_role` atau secret key di browser, dan metadata yang dapat diedit pengguna tidak memberikan hak admin.
+4. `/kelas-saya`, `/admin`, dan API sesi menggunakan pemeriksaan yang sama. Query kursus, pendaftaran dan progres tetap dibatasi oleh RLS Supabase menggunakan JWT pengguna.
+5. Cookie hasil refresh diteruskan ke respons server. Respons autentikasi tidak boleh di-cache. Logout dan pergantian akun menghapus state privat, termasuk membuang hasil query lama yang belum selesai.
+
+`GET /api/session` mengembalikan `200` beserta identitas ringkas/peran bila valid, `401` bila belum masuk, atau `503` bila konfigurasi, Auth, maupun database tidak dapat diverifikasi. Tidak ada access token/refresh token dalam respons API ini. Metode selain GET ditolak.
+
+`SUPABASE_ANON_KEY` dapat dipakai sebagai fallback untuk proyek yang masih menggunakan kunci anon JWT. Semua endpoint konfigurasi, sesi, halaman terlindungi, dan health membaca konfigurasi yang sama; kunci secret/service_role ditolak oleh endpoint publik.
+
+### Mengatasi error Google yang terkonfirmasi
+
+Pada pemeriksaan browser, Google mengembalikan **Error 400: `redirect_uri_mismatch`**. Katalog dan Auth settings tersedia, tetapi hal itu belum membuktikan Google OAuth berhasil.
+
+Di **Google Cloud Console → Google Auth Platform → Clients**, pilih **OAuth Client Web application yang Client ID-nya sama dengan konfigurasi Google Provider di Supabase**. Pada **Authorized redirect URIs**, tambahkan persis:
+
+```text
+https://zejbfnngfsrhvdkywpgv.supabase.co/auth/v1/callback
+```
+
+Alamat tersebut adalah callback Google ke Supabase. `/login` dan `/admin/login` milik Vercel masuk ke **Redirect URLs di Supabase**, bukan menjadi pengganti callback Google. Pada Supabase, daftarkan alamat login untuk setiap domain Vercel yang benar-benar digunakan. Mulai ulang login dari tombol Google pada browser dan domain yang sama setelah perubahan tersimpan. Jangan mengirim Client Secret atau password melalui chat/repository.
+
+Pengaturan Google Cloud tidak dapat diubah melalui koneksi tools pada sesi perbaikan ini; pengelola OAuth Client perlu menyimpan URI tersebut. Mengaktifkan fitur Supabase **OAuth Server** tidak memperbaiki Google social login; aplikasi ini menggunakan Google Provider Supabase.
+
+Sesudah login pertama berhasil, barulah UUID akun tersedia untuk penetapan administrator. Jangan menunjuk akun peserta secara otomatis menjadi admin dan jangan mematikan RLS. Saat pemeriksaan awal, `auth.users` dan `academy_admins` masih kosong.
+
+### Pengujian
+
+- `npm ci && npm test && npm run build` — 14 pengujian sesi/config/frontend-backend, termasuk refresh cookie kedaluwarsa dan cookie terpotong menjadi beberapa chunk.
+- `npm run build`, lalu `python3 tests/run-browser.py` — membutuhkan Python Playwright dan Chromium pada `/usr/bin/chromium`. Harness lokal memakai respons Supabase sintetis, bukan akun sungguhan. Tujuh skenario browser mencakup pengunjung anonim, callback PKCE peserta, penolakan admin, logout, callback admin, kode OAuth tidak valid, serta pemulihan setelah backend gagal.
+- `tests/rls.sql` — uji database sebagai pemilik database pada sesi tepercaya. Fixture disisipkan dalam transaksi dan seluruhnya di-rollback. Memeriksa akses pelajaran peserta yang disetujui, pemisahan enrollment/progres, penolakan self-approval premium/admin, serta persetujuan oleh admin. File ini sudah dijalankan dan lulus pada database Academy dalam sesi perbaikan.
+
+Build, 14 pengujian Node, tujuh skenario browser lokal dan uji RLS database asli lulus. Pengujian Google dengan akun sungguhan belum selesai karena redirect URI Google masih perlu diperbaiki oleh pengelola. Tidak ada akun uji permanen yang dibuat dan tidak ada skema/data produksi yang diubah oleh pengujian transaksi.
