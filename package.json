@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node tests/auth.test.js"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",
