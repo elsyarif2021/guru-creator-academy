@@ -27,6 +27,7 @@ function requestedView() {
 }
 
 function permittedView(view) {
+  if (view === 'home' && admin()) return 'admin';
   if (view === 'mine' && !state.user) return 'login';
   if (['admin', 'editor'].includes(view) && !admin()) return 'admin-login';
   return view;
@@ -116,7 +117,7 @@ async function init() {
     await setSession();
     if (code && !state.oauthError) {
       if (state.user) {
-        location.replace(adminLogin ? paths.admin : paths.mine);
+        location.replace(adminLogin || admin() ? paths.admin : paths.mine);
         return;
       }
       state.oauthError = 'oauth_exchange_failed';
@@ -138,6 +139,11 @@ async function init() {
   }
   state.loading = false;
   render();
+  if (state.view === 'admin' && admin()) {
+    const section = sessionStorage.getItem('academy_admin_section');
+    sessionStorage.removeItem('academy_admin_section');
+    if (section) document.getElementById(section)?.scrollIntoView({block:'start'});
+  }
 }
 
 async function setSession(signedOut = false) {
@@ -377,8 +383,8 @@ function adminReport() {
       return '<div class="studioitem"><div class="details"><b>'+esc(course)+'</b><small>Peserta '+esc(row.user_id)+' · '+esc(dateLabel(row.created_at || row.occurred_at))+'</small></div><span>'+esc(summary(row))+'</span></div>';
     }).join('') : '<p>Belum ada catatan pada halaman ini.</p>';
   const next = (page+1)*reportSize < Math.max(enrollments.count || 0, activity.count || 0);
-  return '<section class="panel academy-report"><h2>Pemantauan Peserta</h2><p>'+esc(enrollments.count ?? '—')+' pendaftaran kursus</p>'
-    +rows(enrollments,row => statusLabel(row.status))+'<h2>Riwayat Aktivitas Belajar</h2>'
+  return '<section class="panel academy-report" id="admin-peserta"><h2>Pemantauan Peserta</h2><p>'+esc(enrollments.count ?? '—')+' pendaftaran kursus</p>'
+    +rows(enrollments,row => statusLabel(row.status))+'<h2 id="admin-riwayat">Riwayat Aktivitas Belajar</h2>'
     +rows(activity,row => row.kind+' · '+statusLabel(row.detail))
     +'<div class="report-nav"><button class="btn secondary" data-action="report-page" data-page="'+Math.max(0,page-1)+'" '+(page===0?'disabled':'')+'>Sebelumnya</button><span>Halaman '+(page+1)+'</span><button class="btn secondary" data-action="report-page" data-page="'+(page+1)+'" '+(next?'':'disabled')+'>Berikutnya</button></div></section>';
 }
@@ -405,7 +411,7 @@ function healthPanel() {
     +item('Callback yang harus terdaftar di Google Cloud',health.googleCallback || 'Belum tersedia')
     +item('Pengalihan ke Google (peserta / admin)',[health.oauth?.participant,health.oauth?.admin].map(status).join(' / '))
     +item('Login lengkap dan hak akses akun', 'Perlu diuji dengan akun Google') : '';
-  return '<section class="panel academy-health"><h2>Status Integrasi</h2><dl>'
+  return '<section class="panel academy-health" id="status-integrasi"><h2>Status Integrasi</h2><dl>'
     +item('URL aplikasi',location.origin)+item('Redirect peserta di Supabase',location.origin+'/login')
     +item('Redirect admin di Supabase',location.origin+'/admin/login')+results+'</dl>'
     +(health?.nextStep || health?.message ? '<p role="status">'+esc(health.nextStep || health.message)+'</p>' : '')
@@ -413,7 +419,7 @@ function healthPanel() {
 }
 
 function adminPage() {
- return '<div class="pagehead"><span class="eyebrow">DASHBOARD ADMINISTRATOR · '+(superAdmin()?'SUPER ADMIN':'ADMIN')+'</span><h1>Kelola Guru Creator Academy</h1><p>Akses pengelolaan untuk Super Admin dan Admin Sekolah.</p></div><div class="stats"><div class="stat"><div class="stat-icon">📘</div><div><strong>'+state.courses.length+'</strong><small>Kursus</small></div></div><div class="stat"><div class="stat-icon">🕒</div><div><strong>'+state.requests.length+'</strong><small>Pengajuan Premium</small></div></div><div class="stat"><div class="stat-icon">🔐</div><div><strong>2</strong><small>Slot Administrator</small></div></div></div>'+healthPanel()+adminReport()+'<div class="panel"><div class="heading"><h2>Kursus dan Materi</h2><button class="btn" data-action="new">+ Kursus Baru</button></div>'+state.courses.map(c=>'<div class="studioitem"><div class="details"><b>'+esc(c.title)+'</b><small>'+esc(c.category)+' · '+(c.premium?'Premium':'Gratis')+'</small></div><button data-course="'+c.id+'">Lihat</button><button data-edit="'+c.id+'">Edit</button><button data-delete="'+c.id+'">Hapus</button></div>').join('')+'</div><div class="panel"><h2>Persetujuan Peserta Premium</h2>'+(state.requests.length?state.requests.map(r=>'<div class="studioitem"><div class="details"><b>'+esc(state.courses.find(c=>c.id===r.course_id)?.title||'Kursus')+'</b><small>Peserta '+esc(r.user_id.slice(0,8))+'… · '+esc(r.created_at.slice(0,10))+'</small></div><button class="btn" data-approve="'+r.id+'">Setujui</button></div>').join(''):'<p>Belum ada permintaan.</p>')+'</div>';
+ return '<div class="pagehead"><span class="eyebrow">DASHBOARD ADMINISTRATOR · '+(superAdmin()?'SUPER ADMIN':'ADMIN')+'</span><h1>Kelola Guru Creator Academy</h1><p>Akses pengelolaan untuk Super Admin dan Admin Sekolah.</p></div><div class="stats"><div class="stat"><div class="stat-icon">📘</div><div><strong>'+state.courses.length+'</strong><small>Kursus</small></div></div><div class="stat"><div class="stat-icon">🕒</div><div><strong>'+state.requests.length+'</strong><small>Pengajuan Premium</small></div></div><div class="stat"><div class="stat-icon">🔐</div><div><strong>2</strong><small>Slot Administrator</small></div></div></div>'+healthPanel()+adminReport()+'<div class="panel" id="admin-materi"><div class="heading"><h2>Kursus dan Materi</h2><button class="btn" data-action="new">+ Kursus Baru</button></div>'+state.courses.map(c=>'<div class="studioitem"><div class="details"><b>'+esc(c.title)+'</b><small>'+esc(c.category)+' · '+(c.premium?'Premium':'Gratis')+'</small></div><button data-course="'+c.id+'">Lihat</button><button data-edit="'+c.id+'">Edit</button><button data-delete="'+c.id+'">Hapus</button></div>').join('')+'</div><div class="panel" id="admin-premium"><h2>Persetujuan Peserta Premium</h2>'+(state.requests.length?state.requests.map(r=>'<div class="studioitem"><div class="details"><b>'+esc(state.courses.find(c=>c.id===r.course_id)?.title||'Kursus')+'</b><small>Peserta '+esc(r.user_id.slice(0,8))+'… · '+esc(r.created_at.slice(0,10))+'</small></div><button class="btn" data-approve="'+r.id+'">Setujui</button></div>').join(''):'<p>Belum ada permintaan.</p>')+'</div>';
 }
 function editor() {
  const c=state.courses.find(c=>c.id===state.edit);
@@ -431,12 +437,33 @@ function render() {
  state.view=permittedView(state.view);
  const views={home,catalog,mine,detail,admin:adminPage,editor,login:()=>authView('login'),register:()=>authView('register'),'admin-login':()=>authView('admin-login')};
  const names={home:'Beranda',catalog:'Katalog Kursus',mine:'Kelas Saya',detail:'Ruang Belajar',admin:'Dashboard Admin',editor:'Editor Kursus',login:'Login',register:'Daftar','admin-login':'Login Admin'};
- const menu=[['home','▦','Beranda'],['catalog','▤','Katalog Kursus'],...(state.user?[['mine','▣','Kelas Saya']]:[]),...(admin()?[['admin','▥','Dashboard Admin']]:[])];
- $('#app').innerHTML='<div class="layout"><aside class="sidebar '+(state.menu?'open':'')+'"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div>'+menu.map(([key,icon,name])=>'<button class="navbtn '+(state.view===key?'active':'')+'" data-go="'+key+'"><span style="font-size:20px">'+icon+'</span>'+name+'</button>').join('')+'<div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Video YouTube pilihan, kelas terstruktur, dan progres tersimpan online.</p></div></aside><main class="main"><header class="top"><div style="display:flex;gap:12px;align-items:center"><button class="mobilemenu" data-action="menu">☰</button><div><div class="crumb">Platform Pembelajaran / '+esc(names[state.view])+'</div><strong>Selamat datang di Academy 👋</strong></div></div><div class="topright">'+(state.user?'<span class="user-label">👤 '+esc(state.user.user_metadata?.full_name||state.user.email)+'</span><button class="btn secondary" data-action="logout">Keluar</button>':'<button class="btn secondary" data-go="login">Masuk</button><button class="btn" data-go="register">Daftar</button>')+'</div></header><div class="content">'+views[state.view]()+'</div></main></div>';
+ const isAdmin = admin();
+ const menu = isAdmin
+   ? [['admin','▥','Dashboard Admin'],['catalog','▤','Katalog Kursus']]
+   : [['home','▦','Beranda'],['catalog','▤','Katalog Kursus'],...(state.user?[['mine','▣','Kelas Saya']]:[])];
+ const adminLinks = isAdmin ? [
+   ['admin-materi','Kelola Materi'],['admin-peserta','Pantau Peserta'],
+   ['admin-premium','Persetujuan Premium'],['admin-riwayat','Riwayat Aktivitas'],
+   ['status-integrasi','Status Integrasi']
+ ].map(([id,label])=>'<button class="navbtn" data-admin-section="'+id+'">'+label+'</button>').join('') : '';
+ $('#app').innerHTML='<div class="layout '+(isAdmin?'admin-layout':'')+'"><aside class="sidebar '+(state.menu?'open':'')+'"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>'+(isAdmin?'Panel Admin Sekolah':'Platform Pembelajaran')+'</small></div></div><div class="navlabel">'+(isAdmin?'PENGELOLAAN AKADEMI':'MENU PESERTA')+'</div>'+menu.map(([key,icon,name])=>'<button class="navbtn '+(state.view===key?'active':'')+'" data-go="'+key+'"><span style="font-size:20px">'+icon+'</span>'+name+'</button>').join('')+adminLinks+'</aside><main class="main"><header class="top"><div style="display:flex;gap:12px;align-items:center"><button class="mobilemenu" data-action="menu">☰</button><div><div class="crumb">Platform Pembelajaran / '+esc(names[state.view])+'</div><strong>'+(isAdmin?(superAdmin()?'Super Admin':'Admin Sekolah'):'Selamat datang di Academy')+'</strong></div></div><div class="topright">'+(state.user?'<span class="user-label">👤 '+esc(state.user.user_metadata?.full_name||state.user.email)+'</span><button class="btn secondary" data-action="logout">Keluar</button>':'<button class="btn secondary" data-go="login">Masuk</button><button class="btn" data-go="register">Daftar</button>')+'</div></header><div class="content">'+views[state.view]()+'</div></main></div>';
  if(state.view==='editor')$('#courseForm').addEventListener('submit',saveCourse);
 }
 document.addEventListener('click',async e => {
  const t=e.target.closest('button,[data-course]');if(!t)return;
+ if(t.dataset.adminSection && admin()){
+   const id = t.dataset.adminSection;
+   if (state.view !== 'admin') {
+     sessionStorage.setItem('academy_admin_section', id);
+     go('admin');
+     if (state.view !== 'admin') return;
+     sessionStorage.removeItem('academy_admin_section');
+   }
+   state.menu = false;
+   render();
+   document.getElementById(id)?.scrollIntoView({block:'start'});
+   return;
+ }
  if(t.dataset.go){go(t.dataset.go);return;}
  if(t.dataset.course){await openCourse(t.dataset.course);return;}
  if(t.dataset.lesson!==undefined){state.index=Number(t.dataset.lesson);render();return;}

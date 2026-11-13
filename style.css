@@ -11,3 +11,12 @@
 .academy-report .details { min-width: 0; overflow-wrap: anywhere; }
 .academy-report h2:not(:first-child) { margin-top: 24px; }
 .report-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.admin-layout .sidebar { background: #11263b; border-right-color: #11263b; }
+.admin-layout .sidebar .logo b { color: #fff; }
+.admin-layout .sidebar .logo small,
+.admin-layout .sidebar .navlabel { color: #b5c6d9; }
+.admin-layout .sidebar .navbtn { color: #e8f1fa; }
+.admin-layout .sidebar .navbtn:hover,
+.admin-layout .sidebar .navbtn.active { background: #294763; color: #fff; }
+.admin-layout [id^="admin-"],
+.admin-layout #status-integrasi { scroll-margin-top: 92px; }
