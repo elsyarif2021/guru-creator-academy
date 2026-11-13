@@ -4,7 +4,7 @@ import { verifiedSession, exchangeCallback } from './auth-client.js';
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const categories = ['Semua','Pendidikan','Teknologi & AI','Desain','Bisnis','Bahasa','Keislaman','Pengembangan Diri','Lainnya'];
-const state = { sb:null, user:null, role:'peserta', view:'home', courses:[], lessons:[], enrollments:[], progress:[], requests:[], current:null, index:0, filter:'Semua', query:'', edit:null, menu:false, loading:true, error:'' };
+const state = { sb:null, user:null, role:'peserta', view:'home', courses:[], lessons:[], enrollments:[], progress:[], requests:[], report:null, health:null, current:null, index:0, filter:'Semua', query:'', edit:null, menu:false, loading:true, error:'' };
 const admin = () => ['admin','super_admin'].includes(state.role);
 const superAdmin = () => state.role === 'super_admin';
 const paths = {
@@ -49,6 +49,7 @@ const notice = (message) => { const n=document.createElement('div'); n.className
 const youtube = (raw) => { try { const u=new URL(raw); if(!['youtube.com','www.youtube.com','m.youtube.com','youtu.be','www.youtube-nocookie.com'].includes(u.hostname)) return ''; const v = u.hostname === 'youtu.be' ? u.pathname.split('/')[1] : u.searchParams.get('v') || u.pathname.match(/\/(?:shorts|embed|live)\/([^/]+)/)?.[1]; return /^[\w-]{11}$/.test(v||'')?v:''; } catch { return /^[\w-]{11}$/.test(raw)?raw:''; } };
 async function init() {
   const requested = requestedView();
+  state.view = requested;
   const params = new URLSearchParams(location.search);
   const fragment = new URLSearchParams(location.hash.slice(1));
   const code = params.get('code');
@@ -151,7 +152,7 @@ async function setSession(signedOut = false) {
   if (user?.id !== state.user?.id || role !== state.role) {
     dataVersion++;
     Object.assign(state, { courses: [], enrollments: [], progress: [], requests: [], lessons: [],
-      current: null, index: 0, edit: null, editLessons: [] });
+      report: null, current: null, index: 0, edit: null, editLessons: [] });
   }
   state.user = user;
   state.role = role;
@@ -182,6 +183,7 @@ async function loadRequests() {
   if(check !== dataVersion)return;
   if(error) notice('Tidak dapat memuat pengajuan.');
   state.requests=data||[];
+  await loadAdminReport(0);
 }
 async function openCourse(id) {
   const check = dataVersion;
@@ -193,7 +195,7 @@ async function openCourse(id) {
   if(check !== dataVersion)return;
   const enrollment=state.enrollments.find(x=>x.course_id===id && x.status==='approved');
   if(admin() || enrollment) {
-    const {data,error}=await state.sb.from('academy_lessons').select('id,course_id,title,youtube_id,position').eq('course_id',id).order('position');
+    const {data,error}=await state.sb.from('academy_lessons').select('id,course_id,title,youtube_id,position').eq('course_id',id).eq('archived',false).order('position');
     if(check !== dataVersion)return;
     if(!error)state.lessons=data||[];
     else notice('Belum dapat membuka video. Pastikan akses sudah disetujui.');
@@ -257,24 +259,27 @@ async function approve(id) {
 async function saveCourse(ev) {
   ev.preventDefault();if(!admin())return;
   const f=ev.target,title=f.elements.title.value.trim(),description=f.elements.description.value.trim(),category=f.elements.category.value,level=f.elements.level.value,premium=f.elements.premium.checked;
-  const titles=[...f.querySelectorAll('[name=lessonTitle]')];
-  const urls=[...f.querySelectorAll('[name=lessonUrl]')];
-  const lessons=titles.map((x,i)=>({title:x.value.trim(),youtube_id:youtube(urls[i].value),position:i}));
-  if(!title||!lessons.length||lessons.some(x=>!x.title||!x.youtube_id))return notice('Isi judul kursus, setiap judul pelajaran dan URL YouTube valid.');
-  let id=state.edit;
-  if(id) {
-    const {error}=await state.sb.from('academy_courses').update({title,description,category,level,premium}).eq('id',id);
-    if(error)return notice('Gagal memperbarui kursus: '+error.message);
-    // Replace lessons only after course edit succeeds; deletions may cascade to lesson progress.
-    const del=await state.sb.from('academy_lessons').delete().eq('course_id',id);
-    if(del.error)return notice('Kursus tersimpan, tetapi pembaruan pelajaran gagal.');
-  } else {
-    const {data,error}=await state.sb.from('academy_courses').insert({title,description,category,level,premium,created_by:state.user.id}).select('id').single();
-    if(error)return notice('Tidak dapat menyimpan kursus: '+error.message);
-    id=data.id;
+  const lessons = [...f.querySelectorAll('.lessonedit')].map(row => ({
+    id: row.dataset.lessonId || null,
+    title: row.querySelector('[name=lessonTitle]').value.trim(),
+    youtube_id: youtube(row.querySelector('[name=lessonUrl]').value)
+  }));
+  if (!title || !lessons.length || lessons.some(l => !l.title || !l.youtube_id)) {
+    return notice('Isi judul kursus, judul setiap pelajaran, dan URL YouTube yang valid.');
   }
-  const {error}=await state.sb.from('academy_lessons').insert(lessons.map(l=>({...l,course_id:id})));
-  if(error)return notice('Kursus dibuat, tetapi penyimpanan daftar pelajaran gagal: '+error.message);
+  const submit = f.querySelector('[type=submit]');
+  if (submit.disabled) return;
+  submit.disabled = true;
+  const check = dataVersion;
+  try {
+    const { error } = await state.sb.rpc('academy_save_course', {
+      course: state.edit, details: { title, description, category, level, premium }, lessons
+    });
+    if (check !== dataVersion) return;
+    if (error) return notice('Gagal menyimpan kursus: ' + error.message);
+  } finally {
+    submit.disabled = false;
+  }
   state.edit=null;await loadCatalog();notice('Kursus berhasil disimpan.');go('admin');
 }
 async function removeCourse(id) {
@@ -289,14 +294,14 @@ async function beginEdit(id=null) {
   state.editLessons=[];
   if(id) {
     const {data,error}=await state.sb.from('academy_lessons')
-      .select('id,title,youtube_id,position').eq('course_id',id).order('position');
+      .select('id,title,youtube_id,position').eq('course_id',id).eq('archived',false).order('position');
     if(error) return notice('Tidak dapat memuat pelajaran untuk diedit.');
     state.editLessons=data||[];
   }
   go('editor');
 }
 function addLesson() {const box=$('#lessonRows');if(box)box.insertAdjacentHTML('beforeend',lessonRow(box.children.length));}
-function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit"><input required name="lessonTitle" placeholder="Judul pelajaran '+(i+1)+'" value="'+esc(l.title)+'"><input required name="lessonUrl" placeholder="Link video YouTube" value="'+esc(l.youtube_id)+'"><button class="btn secondary" type="button" onclick="this.parentElement.remove()">×</button></div>';}
+function lessonRow(i,l={title:'',youtube_id:''}) {return '<div class="lessonedit" data-lesson-id="'+esc(l.id)+'"><input required name="lessonTitle" placeholder="Judul pelajaran '+(i+1)+'" value="'+esc(l.title)+'"><input required name="lessonUrl" placeholder="Link video YouTube" value="'+esc(l.youtube_id)+'"><button class="btn secondary" type="button" onclick="this.parentElement.remove()">×</button></div>';}
 function authView(mode) {
   const register=mode==='register', administrator=mode==='admin-login';
   const blocked=administrator&&state.user&&!admin();
@@ -323,9 +328,9 @@ function authView(mode) {
     +(blocked&&oauthError!=='admin_required'?'<div class="notice" style="margin:16px 0">Akun Google ini belum diberi akses administrator. Pilih akun Google yang sudah ditetapkan.</div>':'')
     +'<button class="btn auth-submit" type="button" data-action="'+(administrator?'google-admin':'google-user')+'" style="margin:16px 0;width:100%;justify-content:center;background:#fff;border:1px solid #cfd8e8;color:#263853;font-size:14px"><span aria-hidden="true" style="font-weight:800;color:#4285f4;font-size:20px">G</span> '+(administrator?'Masuk sebagai Admin dengan Google':register?'Daftar dengan Google':'Masuk dengan Google')+' →</button>'
     +(blocked?'<button class="btn secondary" data-action="logout">Keluar dari akun peserta</button>':'')
-    +'<div class="auth-switch">'+(administrator?'<button data-go="login">Login Peserta</button>':register?'Sudah terdaftar? <button data-go="login">Masuk</button>':'Belum terdaftar? <button data-go="register">Daftar menggunakan Google</button>')+'</div>'
+    +'<div class="auth-switch">'+(administrator?'<button data-go="login">Login Peserta</button>':register?'Sudah terdaftar? <button data-go="login">Masuk</button>':'Belum terdaftar? <button data-go="register">Daftar menggunakan Google</button>')+(administrator?'':' · <button data-go="admin-login">Login Admin Sekolah</button>')+'</div>'
     +'<div class="notice" style="margin-top:14px">Login Google tidak otomatis memberikan hak administrator. Admin harus sudah diberi peran oleh pengelola database. '+(administrator?'Tidak ada pendaftaran admin publik.':'Pendaftaran peserta baru dilakukan saat pertama kali login Google.')+'</div>'
-    +'<p style="font-size:12px;margin-top:14px"><a href="/api/health" target="_blank" rel="noopener noreferrer" style="text-decoration:underline;color:#3155c0">Periksa status koneksi database</a></p></div></section>';
+    +healthPanel()+'</div></section>';
 }
 function courseCard(c) {return '<article class="course" data-course="'+c.id+'"><div class="coursecover"><span style="font-size:65px;color:#3157d8">▶</span><span class="tier '+(c.premium?'premium':'')+'">'+(c.premium?'★ Premium':'Gratis')+'</span></div><div class="coursebody"><div class="eyebrow">'+esc(c.category)+' · '+esc(c.level)+'</div><h3>'+esc(c.title)+'</h3><p>'+esc(c.description||'Belajar melalui video YouTube terstruktur.')+'</p><div class="coursefoot"><span>Kursus video</span><b>Lihat Kelas →</b></div></div></article>';}
 function catalog() {
@@ -342,8 +347,73 @@ function detail() {
  const l=state.lessons[state.index];
  return '<button class="btn secondary" data-go="catalog">← Kembali ke Katalog</button><div class="panel" style="margin:22px 0"><span class="eyebrow">'+esc(c.category)+' · '+esc(c.level)+'</span><h2>'+esc(c.title)+'</h2><p>'+esc(c.description)+'</p><p>'+(c.premium?'👑 Premium':'✅ Gratis')+'</p></div>'+(permitted&&l?'<div class="playerarea"><div><div class="player"><iframe title="'+esc(l.title)+'" src="https://www.youtube-nocookie.com/embed/'+l.youtube_id+'?rel=0" allow="accelerometer;autoplay;encrypted-media;gyroscope;picture-in-picture;web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div><div class="panel"><span class="eyebrow">PELAJARAN '+(state.index+1)+' / '+state.lessons.length+'</span><h2>'+esc(l.title)+'</h2><p>Video dapat diputar jika pemiliknya mengizinkan penyematan.</p><button class="btn" data-action="complete">'+(state.progress.some(p=>p.lesson_id===l.id)?'✓ Selesai':'✓ Tandai Selesai')+'</button> <button class="btn secondary" data-action="next">Pelajaran Berikutnya →</button></div></div><aside class="lessons"><h3>Daftar Pelajaran</h3>'+state.lessons.map((x,i)=>'<button class="lesson '+(i===state.index?'current':'')+'" data-lesson="'+i+'">'+(state.progress.some(p=>p.lesson_id===x.id)?'✅':'▶')+' '+(i+1)+'. '+esc(x.title)+'</button>').join('')+'</aside></div>':'<div class="panel locked"><div style="font-size:45px">🔒</div><h2>'+(enrollment?.status==='pending'?'Permintaan Sedang Diproses':c.premium?'Akses Premium':'Ikuti Kelas Gratis')+'</h2><p>'+(enrollment?.status==='pending'?'Tunggu persetujuan admin untuk melihat video.':c.premium?'Ajukan akses premium; admin akan memeriksa pengajuan. Pembayaran belum tersedia.':'Daftar agar bisa menonton dan menyimpan progres.')+'</p>'+(enrollment?.status==='pending'?'':'<button class="btn" data-action="enroll">'+(c.premium?'Ajukan Akses Premium':'Ikuti Kursus Gratis')+'</button>')+'</div>');
 }
+const reportSize = 25;
+let reportRequest = 0;
+const dateLabel = value => new Date(value).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' });
+const statusLabel = value => ({ approved: 'Aktif', pending: 'Menunggu', rejected: 'Ditolak' })[value] || value;
+
+async function loadAdminReport(page) {
+  if (!admin()) return;
+  const check = dataVersion;
+  const request = ++reportRequest;
+  const start = page * reportSize;
+  const [enrollments, activity] = await Promise.all([
+    state.sb.from('academy_enrollments').select('id,user_id,course_id,status,created_at', { count: 'exact' })
+      .order('created_at', { ascending: false }).order('id').range(start, start + reportSize - 1),
+    state.sb.from('academy_activity').select('kind,occurred_at,user_id,course_id,item_id,detail', { count: 'exact' })
+      .order('occurred_at', { ascending: false }).order('kind').order('item_id').order('user_id')
+      .range(start, start + reportSize - 1)
+  ]);
+  if (check === dataVersion && request === reportRequest) state.report = { page, enrollments, activity };
+}
+
+function adminReport() {
+  const report = state.report;
+  if (!report) return '';
+  const { page, enrollments, activity } = report;
+  const rows = (result, summary) => result.error ? '<p role="alert">Data gagal dimuat. <button data-action="report-page" data-page="'+page+'">Muat ulang</button></p>' :
+    result.data?.length ? result.data.map(row => {
+      const course = state.courses.find(c => c.id === row.course_id)?.title || row.course_id;
+      return '<div class="studioitem"><div class="details"><b>'+esc(course)+'</b><small>Peserta '+esc(row.user_id)+' · '+esc(dateLabel(row.created_at || row.occurred_at))+'</small></div><span>'+esc(summary(row))+'</span></div>';
+    }).join('') : '<p>Belum ada catatan pada halaman ini.</p>';
+  const next = (page+1)*reportSize < Math.max(enrollments.count || 0, activity.count || 0);
+  return '<section class="panel academy-report"><h2>Pemantauan Peserta</h2><p>'+esc(enrollments.count ?? '—')+' pendaftaran kursus</p>'
+    +rows(enrollments,row => statusLabel(row.status))+'<h2>Riwayat Aktivitas Belajar</h2>'
+    +rows(activity,row => row.kind+' · '+statusLabel(row.detail))
+    +'<div class="report-nav"><button class="btn secondary" data-action="report-page" data-page="'+Math.max(0,page-1)+'" '+(page===0?'disabled':'')+'>Sebelumnya</button><span>Halaman '+(page+1)+'</span><button class="btn secondary" data-action="report-page" data-page="'+(page+1)+'" '+(next?'':'disabled')+'>Berikutnya</button></div></section>';
+}
+
+async function loadHealth() {
+  const button = $('[data-action="check-health"]');
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch('/api/health', { cache: 'no-store' });
+    state.health = await response.json();
+  } catch {
+    state.health = { message: 'Endpoint status Vercel tidak dapat dihubungi.' };
+  }
+  render();
+}
+
+function healthPanel() {
+  const health = state.health;
+  const item = (name,value) => '<dt>'+esc(name)+'</dt><dd>'+esc(value)+'</dd>';
+  const status = value => value === true ? 'Terhubung' : value === false ? 'Gagal' : 'Belum diperiksa';
+  const results = health ? item('Supabase Auth', status(health.auth?.ready))
+    +item('Google Provider',health.auth?.googleEnabled===true?'Aktif':health.auth?.googleEnabled===false?'Nonaktif':'Belum diperiksa')
+    +item('Database katalog',status(health.schema?.coursesReady))
+    +item('Callback yang harus terdaftar di Google Cloud',health.googleCallback || 'Belum tersedia')
+    +item('Pengalihan ke Google (peserta / admin)',[health.oauth?.participant,health.oauth?.admin].map(status).join(' / '))
+    +item('Login lengkap dan hak akses akun', 'Perlu diuji dengan akun Google') : '';
+  return '<section class="panel academy-health"><h2>Status Integrasi</h2><dl>'
+    +item('URL aplikasi',location.origin)+item('Redirect peserta di Supabase',location.origin+'/login')
+    +item('Redirect admin di Supabase',location.origin+'/admin/login')+results+'</dl>'
+    +(health?.nextStep || health?.message ? '<p role="status">'+esc(health.nextStep || health.message)+'</p>' : '')
+    +'<button class="btn secondary" type="button" data-action="check-health">Periksa konfigurasi</button></section>';
+}
+
 function adminPage() {
- return '<div class="pagehead"><span class="eyebrow">DASHBOARD ADMINISTRATOR · '+(superAdmin()?'SUPER ADMIN':'ADMIN')+'</span><h1>Kelola Guru Creator Academy</h1><p>Hanya dua akun administrator yang telah disahkan.</p></div><div class="stats"><div class="stat"><div class="stat-icon">📘</div><div><strong>'+state.courses.length+'</strong><small>Kursus</small></div></div><div class="stat"><div class="stat-icon">🕒</div><div><strong>'+state.requests.length+'</strong><small>Pengajuan Premium</small></div></div><div class="stat"><div class="stat-icon">🔐</div><div><strong>2</strong><small>Slot Administrator</small></div></div></div><div class="panel"><div class="heading"><h2>Kursus</h2><button class="btn" data-action="new">+ Kursus Baru</button></div>'+state.courses.map(c=>'<div class="studioitem"><div class="details"><b>'+esc(c.title)+'</b><small>'+esc(c.category)+' · '+(c.premium?'Premium':'Gratis')+'</small></div><button data-course="'+c.id+'">Lihat</button><button data-edit="'+c.id+'">Edit</button><button data-delete="'+c.id+'">Hapus</button></div>').join('')+'</div><div class="panel"><h2>Persetujuan Peserta Premium</h2>'+(state.requests.length?state.requests.map(r=>'<div class="studioitem"><div class="details"><b>'+esc(state.courses.find(c=>c.id===r.course_id)?.title||'Kursus')+'</b><small>Peserta '+esc(r.user_id.slice(0,8))+'… · '+esc(r.created_at.slice(0,10))+'</small></div><button class="btn" data-approve="'+r.id+'">Setujui</button></div>').join(''):'<p>Belum ada permintaan.</p>')+'</div>';
+ return '<div class="pagehead"><span class="eyebrow">DASHBOARD ADMINISTRATOR · '+(superAdmin()?'SUPER ADMIN':'ADMIN')+'</span><h1>Kelola Guru Creator Academy</h1><p>Akses pengelolaan untuk Super Admin dan Admin Sekolah.</p></div><div class="stats"><div class="stat"><div class="stat-icon">📘</div><div><strong>'+state.courses.length+'</strong><small>Kursus</small></div></div><div class="stat"><div class="stat-icon">🕒</div><div><strong>'+state.requests.length+'</strong><small>Pengajuan Premium</small></div></div><div class="stat"><div class="stat-icon">🔐</div><div><strong>2</strong><small>Slot Administrator</small></div></div></div>'+healthPanel()+adminReport()+'<div class="panel"><div class="heading"><h2>Kursus dan Materi</h2><button class="btn" data-action="new">+ Kursus Baru</button></div>'+state.courses.map(c=>'<div class="studioitem"><div class="details"><b>'+esc(c.title)+'</b><small>'+esc(c.category)+' · '+(c.premium?'Premium':'Gratis')+'</small></div><button data-course="'+c.id+'">Lihat</button><button data-edit="'+c.id+'">Edit</button><button data-delete="'+c.id+'">Hapus</button></div>').join('')+'</div><div class="panel"><h2>Persetujuan Peserta Premium</h2>'+(state.requests.length?state.requests.map(r=>'<div class="studioitem"><div class="details"><b>'+esc(state.courses.find(c=>c.id===r.course_id)?.title||'Kursus')+'</b><small>Peserta '+esc(r.user_id.slice(0,8))+'… · '+esc(r.created_at.slice(0,10))+'</small></div><button class="btn" data-approve="'+r.id+'">Setujui</button></div>').join(''):'<p>Belum ada permintaan.</p>')+'</div>';
 }
 function editor() {
  const c=state.courses.find(c=>c.id===state.edit);
@@ -353,7 +423,7 @@ function render() {
  if(state.loading){$('#app').innerHTML='<div class="empty"><h2>Memuat Guru Creator Academy…</h2></div>';return;}
  if(state.error){
   // Public landing page remains visible, but no fake account creation or premium access.
-  $('#app').innerHTML='<div class="layout"><aside class="sidebar"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div><div class="navbtn active">▦ Beranda</div><div class="navbtn">▤ Katalog Kursus</div><div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Materi YouTube terstruktur, kelas gratis dan premium.</p></div></aside><main class="main"><header class="top"><div><div class="crumb">Platform Pembelajaran / Beranda</div><strong>Selamat datang di Academy 👋</strong></div><span style="color:#a05e05;font-size:12px">● Pengaturan diperlukan</span></header><div class="content"><section class="hero"><div><div class="pill">✦ Platform Belajar Digital</div><h1>Belajar Hal Baru,<br><span>Berbagi Manfaat</span><br>untuk Semua.</h1><p>Platform kursus online dengan video YouTube, kelas gratis dan premium, serta progres belajar.</p></div><div class="hero-graphic">🎓</div></section><section class="panel" style="margin-top:24px;border:1px solid #f2d399;background:#fffcf5"><h2>🔧 Koneksi belum dapat diverifikasi</h2><p>'+esc(state.error)+'</p><p>Sesi akun atau layanan database belum dapat diperiksa. Data privat tidak ditampilkan sampai koneksi terverifikasi.</p><p><a href="/api/health" target="_blank" rel="noopener">Periksa status koneksi</a>, lalu coba kembali. Pengelola dapat memeriksa konfigurasi deployment bila masalah berlanjut.</p><button class="btn" data-action="retry">Coba lagi</button></section><section class="features"><div class="feature"><span>▶️</span><h3>Materi YouTube</h3><p>Video dikelompokkan berdasarkan kursus.</p></div><div class="feature"><span>🎓</span><h3>Kelas Terstruktur</h3><p>Kursus gratis dan premium untuk peserta terdaftar.</p></div><div class="feature"><span>✅</span><h3>Progres Belajar</h3><p>Riwayat belajar tersimpan di database setelah aktivasi.</p></div></section></div></main></div>';
+  $('#app').innerHTML='<div class="layout"><aside class="sidebar"><div class="logo"><div class="logo-mark">🎓</div><div><b>Guru Creator Academy</b><small>Platform Pembelajaran</small></div></div><div class="navlabel">MENU UTAMA</div><div class="navbtn active">▦ Beranda</div><div class="navbtn">▤ Katalog Kursus</div><div class="sidebar-tip"><b>✨ Belajar tanpa batas</b><p>Materi YouTube terstruktur, kelas gratis dan premium.</p></div></aside><main class="main"><header class="top"><div><div class="crumb">Platform Pembelajaran / Beranda</div><strong>Selamat datang di Academy 👋</strong></div><span style="color:#a05e05;font-size:12px">● Pengaturan diperlukan</span></header><div class="content"><section class="hero"><div><div class="pill">✦ Platform Belajar Digital</div><h1>Belajar Hal Baru,<br><span>Berbagi Manfaat</span><br>untuk Semua.</h1><p>Platform kursus online dengan video YouTube, kelas gratis dan premium, serta progres belajar.</p></div><div class="hero-graphic">🎓</div></section><section class="panel" style="margin-top:24px;border:1px solid #f2d399;background:#fffcf5"><h2>🔧 Koneksi belum dapat diverifikasi</h2><p>'+esc(state.error)+'</p><p>Sesi akun atau layanan database belum dapat diperiksa. Data privat tidak ditampilkan sampai koneksi terverifikasi.</p>'+healthPanel()+'<button class="btn" data-action="retry">Coba lagi</button></section><section class="features"><div class="feature"><span>▶️</span><h3>Materi YouTube</h3><p>Video dikelompokkan berdasarkan kursus.</p></div><div class="feature"><span>🎓</span><h3>Kelas Terstruktur</h3><p>Kursus gratis dan premium untuk peserta terdaftar.</p></div><div class="feature"><span>✅</span><h3>Progres Belajar</h3><p>Riwayat belajar tersimpan di database setelah aktivasi.</p></div></section></div></main></div>';
   return;
 }
  const allowed=['home','catalog','mine','detail','admin','editor','login','register','admin-login'];
@@ -385,6 +455,8 @@ document.addEventListener('click',async e => {
  case 'logout':await signOut();break;
  case 'menu':state.menu=!state.menu;render();break;
  case 'retry':location.reload();break;
+ case 'check-health':await loadHealth();break;
+ case 'report-page':await loadAdminReport(Number(t.dataset.page));render();break;
  }
 });
 document.addEventListener('input',e=>{if(e.target.id==='searchBox'){state.query=e.target.value;const box=$('.content');box.innerHTML=catalog();const input=$('#searchBox');input.focus();input.setSelectionRange(input.value.length,input.value.length);}});

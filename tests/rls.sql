@@ -40,6 +40,10 @@ select set_config('request.jwt.claims', json_build_object('sub',current_setting(
 do $$
 begin
   if exists (select 1 from public.academy_admins) then raise exception 'Participant can read administrator identities'; end if;
+  begin
+    perform public.academy_save_course(null, '{}', '[]');
+    raise exception 'Participant can use admin course editor';
+  exception when insufficient_privilege then null; end;
   if not exists (select 1 from public.academy_lessons where id=current_setting('test.lesson')::uuid) then raise exception 'Approved learner cannot read lesson'; end if;
   if exists (select 1 from public.academy_enrollments where user_id=current_setting('test.stranger')::uuid) then raise exception 'Participant can read another enrollment'; end if;
   insert into public.academy_progress(user_id,lesson_id) values(current_setting('test.learner')::uuid,current_setting('test.lesson')::uuid);
@@ -68,6 +72,17 @@ select set_config('request.jwt.claims', json_build_object('sub',current_setting(
 do $$
 begin
   if not exists(select 1 from public.academy_admins where user_id=current_setting('test.manager')::uuid) then raise exception 'Administrator cannot read own role'; end if;
+  perform public.academy_save_course(
+    current_setting('test.free_course')::uuid,
+    '{"title":"Updated course","description":"","category":"Pendidikan","level":"Pemula","premium":false}',
+    '[{"title":"Replacement lesson","youtube_id":"dQw4w9WgXcQ"}]'
+  );
+  if not exists(select 1 from public.academy_lessons where id=current_setting('test.lesson')::uuid and archived) then
+    raise exception 'Removed lesson was not archived';
+  end if;
+  if not exists(select 1 from public.academy_activity where item_id=current_setting('test.lesson')::uuid and kind='Pelajaran selesai') then
+    raise exception 'Editing a course removed its activity history';
+  end if;
   update public.academy_enrollments set status='approved' where user_id=current_setting('test.stranger')::uuid;
   if not found then raise exception 'Administrator cannot approve pending enrollment'; end if;
 end $$;

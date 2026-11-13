@@ -82,3 +82,16 @@ Sesudah login pertama berhasil, barulah UUID akun tersedia untuk penetapan admin
 - `tests/rls.sql` — uji database sebagai pemilik database pada sesi tepercaya. Fixture disisipkan dalam transaksi dan seluruhnya di-rollback. Memeriksa akses pelajaran peserta yang disetujui, pemisahan enrollment/progres, penolakan self-approval premium/admin, serta persetujuan oleh admin. File ini sudah dijalankan dan lulus pada database Academy dalam sesi perbaikan.
 
 Build, 14 pengujian Node, tujuh skenario browser lokal dan uji RLS database asli lulus. Pengujian Google dengan akun sungguhan belum selesai karena redirect URI Google masih perlu diperbaiki oleh pengelola. Tidak ada akun uji permanen yang dibuat dan tidak ada skema/data produksi yang diubah oleh pengujian transaksi.
+
+## Dashboard dan riwayat belajar
+
+Terapkan migrasi `supabase/migrations/20261113095000_academy_dashboard.sql` sebelum
+mengaktifkan build baru. Migrasi menambahkan laporan pendaftaran dan penyelesaian
+pelajaran dengan akses sesuai RLS. Edit kursus menyimpan perubahan dalam satu
+transaksi dan mengarsipkan pelajaran yang dikeluarkan dari daftar aktif agar
+rekaman progres lama tetap tersimpan.
+
+Panel Status Integrasi tersedia di halaman masuk dan dashboard admin. Pemeriksaan
+awal OAuth memakai URL produksi Vercel dan menunjukkan respons pengalihan
+Supabase. Uji login lengkap secara terpisah dengan akun peserta, Super Admin,
+dan Admin, termasuk membuka kembali kursus untuk memastikan progres tersimpan.

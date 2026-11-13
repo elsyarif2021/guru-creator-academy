@@ -3,3 +3,11 @@
 
 /* Login and registration for the local-demo frontend */
 .auth-wrap{display:grid;grid-template-columns:1fr 1fr;background:#fff;border:1px solid #e9eef7;border-radius:22px;overflow:hidden;min-height:540px;box-shadow:0 16px 40px #253b6610}.auth-art{background:linear-gradient(140deg,#132b85,#3e68e6);color:white;padding:48px 38px;display:flex;flex-direction:column;justify-content:center}.auth-art h1{font-size:34px;line-height:1.25;margin:25px 0 18px}.auth-art p{line-height:1.8;color:#e2eaff;font-size:14px}.auth-illustration{font-size:60px;text-align:center;margin-top:40px}.auth-panel{padding:42px 38px}.auth-panel h2{font-size:27px;margin:12px 0}.auth-panel>p{font-size:13px;color:#718099;line-height:1.7}.auth-panel .form{display:flex;flex-direction:column;gap:10px;margin-top:24px}.auth-panel .form label{font-size:12px;font-weight:700}.auth-panel .form input{width:100%;padding:13px 15px;border:1px solid #dce4ef;border-radius:11px;outline-color:#3157d8}.auth-submit{margin-top:12px;width:100%}.auth-switch{text-align:center;margin-top:22px;font-size:13px;color:#718099}.auth-switch button{border:0;background:none;color:#2456d3;font-weight:800;cursor:pointer}.auth-warning{margin-top:25px;font-size:11px;line-height:1.8}.user-label{font-size:12px;font-weight:700;color:#42557a}@media(max-width:780px){.auth-wrap{grid-template-columns:1fr}.auth-art{padding:25px 23px}.auth-art h1{font-size:23px;margin:12px 0}.auth-art p{font-size:12px}.auth-illustration{display:none}.auth-panel{padding:28px 22px}.user-label{display:none}}
+
+.academy-health { margin-block: 16px; }
+.academy-health dl { margin-block: 12px; }
+.academy-health dt { font-weight: 700; margin-top: 8px; }
+.academy-health dd { margin: 0; overflow-wrap: anywhere; }
+.academy-report .details { min-width: 0; overflow-wrap: anywhere; }
+.academy-report h2:not(:first-child) { margin-top: 24px; }
+.report-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
