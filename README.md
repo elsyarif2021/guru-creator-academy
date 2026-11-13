@@ -32,7 +32,7 @@ insert into public.academy_admins (user_id, role) values
   ('UUID_ADMIN_KEDUA', 'admin');
 ```
 
-Satu akun dapat ditetapkan per peran. Jika seorang admin sudah masuk sebelum perannya ditetapkan, buka kembali `/admin` untuk memuat ulang hak aksesnya.
+Satu Super Admin dan dua Admin ditetapkan untuk Academy. Jika seorang admin sudah masuk sebelum perannya ditetapkan, buka kembali `/admin` untuk memuat ulang hak aksesnya.
 
 ## Migrasi data dari AppDeploy
 
@@ -95,3 +95,5 @@ Panel Status Integrasi tersedia di halaman masuk dan dashboard admin. Pemeriksaa
 awal OAuth memakai URL produksi Vercel dan menunjukkan respons pengalihan
 Supabase. Uji login lengkap secara terpisah dengan akun peserta, Super Admin,
 dan Admin, termasuk membuka kembali kursus untuk memastikan progres tersimpan.
+
+Pemeriksaan lanjutan menggunakan data sementara di transaksi database. Status akun nyata dan login Google harus diperiksa terpisah. Uji browser lokal pada lingkungan saat ini terhalang izin socket Chromium.

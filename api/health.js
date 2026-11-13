@@ -31,7 +31,7 @@ export default async function handler(req,res) {
     } catch { return false; }
   };
   const [participant,admin]=await Promise.all([startsGoogle('/login'),startsGoogle('/admin/login')]);
-  const ready=auth.ok&&courses.ok&&auth.googleEnabled===true;
+  const ready=auth.ok&&courses.ok&&auth.googleEnabled===true&&participant&&admin;
   return res.status(ready?200:503).json({
     ok:ready,project:url.match(/https:\/\/([^.]+)/)?.[1],
     googleCallback:url+'/auth/v1/callback',
@@ -41,7 +41,7 @@ export default async function handler(req,res) {
     nextStep:!auth.ok?'Periksa project URL, publishable key, dan pengaturan Auth Supabase.':
       auth.googleEnabled===false?'Aktifkan Google Provider di Supabase dan daftarkan callback URI Supabase pada Google Cloud OAuth Client.':
       !courses.ok?'Jalankan supabase/schema.sql di SQL Editor proyek Academy, kemudian periksa RLS dan GRANT.':
-      'Uji login dari tombol Google dengan akun peserta dan kedua admin. Status ini hanya memeriksa respons awal Supabase.',
+      'Uji login dari tombol Google dengan akun peserta dan ketiga admin. Status ini hanya memeriksa respons awal Supabase.',
     note:'Google enabled hanya status provider. Jika Google menampilkan redirect_uri_mismatch, daftarkan googleCallback sebagai Authorized redirect URI pada OAuth Client Google yang dipakai Supabase. Hasil ini tidak memeriksa login pengguna sungguhan atau semua kebijakan RLS.'
   });
 }

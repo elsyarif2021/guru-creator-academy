@@ -4,9 +4,10 @@ create extension if not exists pgcrypto;
 
 create table if not exists public.academy_admins (
   user_id uuid primary key references auth.users(id) on delete cascade,
-  role text not null unique check (role in ('super_admin','admin')),
+  role text not null check (role in ('super_admin','admin')),
   created_at timestamptz not null default now()
 );
+create unique index if not exists academy_one_super_admin on public.academy_admins(role) where role='super_admin';
 alter table public.academy_admins enable row level security;
 revoke all on public.academy_admins from public, anon, authenticated;
 grant select on public.academy_admins to authenticated;
@@ -130,8 +131,6 @@ with check (user_id = (select auth.uid()) and exists
   join public.academy_enrollments e on e.course_id = l.course_id
   where l.id = academy_progress.lesson_id and e.user_id = (select auth.uid()) and e.status='approved'));
 -- No participant update/delete of progress records.
--- Admin slot provisioning: first create TWO accounts in Supabase Auth,
--- then replace the UUID placeholders and execute these inserts in SQL Editor:
--- insert into public.academy_admins(user_id,role) values
--- ('SUPER_ADMIN_AUTH_UUID','super_admin'), ('SECOND_ADMIN_AUTH_UUID','admin');
--- The UNIQUE(role) constraint prevents a third admin slot; participants cannot write this table.
+-- Assign administrator roles to verified Google accounts through the trusted database owner.
+-- Multiple admin accounts are supported. Only one super_admin may be assigned.
+-- Client users have no write permission on academy_admins.
